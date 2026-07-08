@@ -1,0 +1,35 @@
+{
+    "name": "esdm2symfony/generator",
+    "description": "Generate runnable event-sourced code from an ESDM model. Adapter-based: one target per framework + database + event-sourcing library.",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "~8.2.0 || ~8.3.0 || ~8.4.0 || ~8.5.0",
+        "symfony/console": "^7.0",
+        "symfony/yaml": "^7.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Esdm\\Generator\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Esdm\\Generator\\Tests\\": "tests/"
+        }
+    },
+    "bin": [
+        "bin/esdmgen"
+    ],
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit",
+        "examples": "scripts/examples.sh",
+        "smoke": "scripts/examples.sh --check"
+    }
+}

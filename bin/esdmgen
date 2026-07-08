@@ -1,0 +1,27 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use Esdm\Generator\Console\BpmnMapCommand;
+use Esdm\Generator\Console\GenerateCommand;
+use Esdm\Generator\Console\TargetsCommand;
+use Symfony\Component\Console\Application;
+
+$autoloads = [
+    __DIR__ . '/../vendor/autoload.php',
+    __DIR__ . '/../../../autoload.php',
+];
+
+foreach ($autoloads as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+
+$application = new Application('BPAG — Business Process App Generator', '0.1.0');
+$application->add(new GenerateCommand());
+$application->add(new TargetsCommand());
+$application->add(new BpmnMapCommand());
+$application->run();

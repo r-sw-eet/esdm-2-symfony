@@ -1,0 +1,6 @@
+target: symfony-patchlevel-postgres
+model: model
+out: generated
+options:
+  namespace: App
+  appName: orders

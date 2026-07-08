@@ -1,0 +1,16 @@
+# Root stack: the dockerized code generator.
+#
+# Generate an app's code (writes into examples/<name>/generated):
+#   docker compose run --rm codegen generate examples/todo
+#   docker compose run --rm codegen targets
+#
+# The generated app brings its own db + api + worker stack:
+#   cd examples/todo/generated && docker compose up -d --build
+services:
+  codegen:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ./examples:/work/examples
+    working_dir: /work
