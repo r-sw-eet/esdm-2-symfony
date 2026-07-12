@@ -1283,6 +1283,8 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
         ]));
         $project->add('src/Shared/Http/CorsSubscriber.php', $this->corsSubscriber($ns));
         $project->add('src/Shared/Dbal/ConnectionFactory.php', $this->connectionFactory());
+        $project->add('src/Shared/EventStore/HashChainCommand.php', $this->hashChainCommand());
+        $project->add('src/Shared/EventStore/VerifyChainCommand.php', $this->verifyChainCommand());
         $project->add('config/bundles.php', $this->bundles());
         $project->add('config/packages/framework.yaml', $this->frameworkYaml());
         $project->add('config/routes.yaml', $this->routesYaml());
@@ -1429,6 +1431,7 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
               - -c
               - |
                 php bin/console event-sourcing:schema:create || true
+                php bin/console app:eventstore:hashchain || true
                 php bin/console event-sourcing:subscription:setup || true
                 php bin/console event-sourcing:subscription:boot || true
                 while true; do php bin/console event-sourcing:subscription:run || true; sleep 1; done
@@ -1478,6 +1481,7 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
 
         setup:
         	docker compose exec api php bin/console event-sourcing:schema:create
+        	docker compose exec api php bin/console app:eventstore:hashchain
         	docker compose exec api php bin/console event-sourcing:subscription:setup
         	docker compose exec api php bin/console event-sourcing:subscription:boot
 
@@ -1571,6 +1575,138 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
                 $params = (new DsnParser(['postgres' => 'pdo_pgsql', 'postgresql' => 'pdo_pgsql']))->parse($dsn);
 
                 return DriverManager::getConnection($params);
+            }
+        }
+
+        PHP;
+    }
+
+    private function hashChainCommand(): string
+    {
+        return <<<'PHP'
+        <?php
+
+        declare(strict_types=1);
+
+        namespace App\Shared\EventStore;
+
+        use Doctrine\DBAL\Connection;
+        use Symfony\Component\Console\Attribute\AsCommand;
+        use Symfony\Component\Console\Command\Command;
+        use Symfony\Component\Console\Input\InputInterface;
+        use Symfony\Component\Console\Output\OutputInterface;
+
+        /**
+         * Installs the in-database hash chain on the `eventstore` table. Idempotent:
+         * run any time after event-sourcing:schema:create. Every insert is then hashed
+         * over its predecessor, so later tampering breaks every hash after it.
+         */
+        #[AsCommand('app:eventstore:hashchain', 'Install the tamper-evidence hash chain on the eventstore table.')]
+        final class HashChainCommand extends Command
+        {
+            public function __construct(private readonly Connection $connection)
+            {
+                parent::__construct();
+            }
+
+            protected function execute(InputInterface $input, OutputInterface $output): int
+            {
+                $this->connection->executeStatement('CREATE EXTENSION IF NOT EXISTS pgcrypto');
+                $this->connection->executeStatement(
+                    "ALTER TABLE eventstore ADD COLUMN IF NOT EXISTS predecessor_hash TEXT NOT NULL DEFAULT ''",
+                );
+                $this->connection->executeStatement(
+                    "ALTER TABLE eventstore ADD COLUMN IF NOT EXISTS hash TEXT NOT NULL DEFAULT ''",
+                );
+
+                // The advisory lock serializes appends (the store itself does not), so the
+                // chain stays linear under concurrency. Mutable bookkeeping columns
+                // (archived, new_stream_start, custom_headers) are excluded from the hash.
+                $this->connection->executeStatement(<<<'SQL'
+                    CREATE OR REPLACE FUNCTION eventstore_hash_chain() RETURNS trigger AS $func$
+                    DECLARE
+                        prev TEXT;
+                    BEGIN
+                        PERFORM pg_advisory_xact_lock(4711);
+                        SELECT hash INTO prev FROM eventstore ORDER BY id DESC LIMIT 1;
+                        NEW.predecessor_hash := COALESCE(NULLIF(prev, ''), repeat('0', 64));
+                        NEW.hash := encode(digest(jsonb_build_array(
+                            NEW.predecessor_hash, NEW.aggregate, NEW.aggregate_id,
+                            NEW.playhead, NEW.event, NEW.payload::jsonb,
+                            to_char(NEW.recorded_on AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                        )::text, 'sha256'), 'hex');
+                        RETURN NEW;
+                    END $func$ LANGUAGE plpgsql
+                    SQL);
+                $this->connection->executeStatement(<<<'SQL'
+                    CREATE OR REPLACE TRIGGER eventstore_hash_chain
+                        BEFORE INSERT ON eventstore
+                        FOR EACH ROW EXECUTE FUNCTION eventstore_hash_chain()
+                    SQL);
+
+                $output->writeln('Hash chain installed on eventstore (pgcrypto + BEFORE INSERT trigger).');
+
+                return Command::SUCCESS;
+            }
+        }
+
+        PHP;
+    }
+
+    private function verifyChainCommand(): string
+    {
+        return <<<'PHP'
+        <?php
+
+        declare(strict_types=1);
+
+        namespace App\Shared\EventStore;
+
+        use Doctrine\DBAL\Connection;
+        use Symfony\Component\Console\Attribute\AsCommand;
+        use Symfony\Component\Console\Command\Command;
+        use Symfony\Component\Console\Input\InputInterface;
+        use Symfony\Component\Console\Output\OutputInterface;
+
+        /**
+         * Recomputes every hash and checks each predecessor link in pure SQL - a
+         * mutated, deleted or reordered event breaks the chain at the first bad row.
+         */
+        #[AsCommand('app:eventstore:verify', 'Verify the eventstore hash chain; exit 1 at the first broken row.')]
+        final class VerifyChainCommand extends Command
+        {
+            public function __construct(private readonly Connection $connection)
+            {
+                parent::__construct();
+            }
+
+            protected function execute(InputInterface $input, OutputInterface $output): int
+            {
+                // Rows with hash = '' predate the chain installation and are skipped.
+                $brokenAt = $this->connection->fetchOne(<<<'SQL'
+                    SELECT min(id) FROM (
+                        SELECT id,
+                            hash <> encode(digest(jsonb_build_array(
+                                predecessor_hash, aggregate, aggregate_id,
+                                playhead, event, payload::jsonb,
+                                to_char(recorded_on AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                            )::text, 'sha256'), 'hex') AS bad_hash,
+                            predecessor_hash <> COALESCE(lag(hash) OVER (ORDER BY id), repeat('0', 64)) AS bad_link
+                        FROM eventstore
+                        WHERE hash <> ''
+                    ) checked
+                    WHERE bad_hash OR bad_link
+                    SQL);
+
+                if ($brokenAt !== null && $brokenAt !== false) {
+                    $output->writeln(sprintf('Event chain BROKEN at id %s.', (string) $brokenAt));
+
+                    return Command::FAILURE;
+                }
+
+                $output->writeln('Event chain intact.');
+
+                return Command::SUCCESS;
             }
         }
 
@@ -1777,6 +1913,21 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
         curl -s -XPOST localhost:8080/<context>/<create-command> -d '{...}'
         curl -s localhost:8080/<context>/<list-query>
         ```
+
+        ## Tamper evidence
+
+        Every event row is hash-chained to its predecessor: a `BEFORE INSERT` trigger
+        (installed by the idempotent `app:eventstore:hashchain` command, run automatically
+        at worker startup) computes a SHA-256 `hash` in-database over the previous row's
+        hash plus the row's immutable columns. Mutable bookkeeping columns (`archived`,
+        `new_stream_start`, `custom_headers`) are not covered. Audit the log with:
+
+        ```sh
+        docker compose exec api php bin/console app:eventstore:verify
+        ```
+
+        Exit code 0 means the chain is intact; a mutated, deleted or reordered event makes
+        it exit 1 and print the first broken id.
 
         ## Domain console
 
