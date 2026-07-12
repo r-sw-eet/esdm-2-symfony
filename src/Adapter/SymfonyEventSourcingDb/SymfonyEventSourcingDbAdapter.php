@@ -348,7 +348,7 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
         if ($guard['state'] !== []) {
             $list = implode(', ', array_map(fn (string $s): string => $this->q($s), $guard['state']));
             $lines[] = '        if (!in_array($state->status, [' . $list . '], true)) {';
-            $lines[] = '            throw new IllegalTransition(' . $this->q($command->name) . ', (string) $state->status);';
+            $lines[] = '            throw new IllegalTransition(' . $this->q($command->name) . ', ($state->status ?? \'\') === \'\' ? \'undefined\' : (string) $state->status);';
             $lines[] = '        }';
             $lines[] = '';
         }
@@ -801,10 +801,10 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
 
         if ($command->lifecycle === Lifecycle::Create) {
             $call = '$id = $this->' . $serviceProp . '->' . $method . '(new ' . $cmdClass . '(' . $argList . '), $this->correlationId());';
-            $success = 'return new JsonResponse([\'id\' => $id], Response::HTTP_CREATED);';
+            $success = 'return new JsonResponse([\'id\' => $id]);';
         } else {
             $call = '$this->' . $serviceProp . '->' . $method . '(new ' . $cmdClass . '(' . $argList . '), $this->correlationId());';
-            $success = 'return new JsonResponse([\'ok\' => true]);';
+            $success = 'return new JsonResponse([\'id\' => (string) ($data[\'id\'] ?? \'\')]);';
         }
 
         $lines[] = '        try {';
@@ -812,7 +812,7 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
         $lines[] = '';
         $lines[] = '            ' . $success;
         $lines[] = '        } catch (DomainViolation $e) {';
-        $lines[] = '            return new JsonResponse([\'error\' => $e->getMessage()], Response::HTTP_CONFLICT);';
+        $lines[] = '            return new JsonResponse([\'error\' => \'CONFLICT\', \'message\' => $e->getMessage(), \'details\' => $e->details()], Response::HTTP_CONFLICT);';
         $lines[] = '        }';
         $lines[] = '    }';
 
@@ -826,6 +826,7 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
         $routeName = $context->name . '_' . Str::snake($query->name);
         $path = $base . '/' . $query->name;
 
+        $entity = Str::studly($query->readModel);
         if ($query->parameters->fields !== []) {
             return [
                 '    #[Route(' . $this->q($path) . ', name: ' . $this->q($routeName) . ', methods: [\'GET\'])]',
@@ -834,7 +835,7 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
                 '        $row = $this->' . $finderProp . '->find((string) $request->query->get(\'id\', \'\'));',
                 '',
                 '        return $row === null',
-                '            ? new JsonResponse([\'error\' => \'not found\'], Response::HTTP_NOT_FOUND)',
+                '            ? new JsonResponse([\'error\' => \'NOT_FOUND\', \'message\' => ' . $this->q($entity . ' not found') . ', \'details\' => [\'errorCode\' => ' . $this->q(strtoupper(Str::snake($query->readModel)) . '_NOT_FOUND') . ', \'reason\' => ' . $this->q('Could not find ' . $entity . ' matching the given filter') . ']], Response::HTTP_NOT_FOUND)',
                 '            : new JsonResponse($row);',
                 '    }',
             ];
@@ -1365,6 +1366,13 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
             '/** Base for domain-rule violations (state machine + guards). Mapped to HTTP 409. */',
             'abstract class DomainViolation extends \\RuntimeException',
             '{',
+            '    abstract public function errorCode(): string;',
+            '',
+            '    /** @return array<string, string> */',
+            '    public function details(): array',
+            '    {',
+            '        return [\'errorCode\' => $this->errorCode()];',
+            '    }',
             '}',
         ]));
         $project->add('src/Shared/IllegalTransition.php', $this->phpFile($ns . '\\Shared', [], [
@@ -1373,7 +1381,18 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
             '{',
             '    public function __construct(public readonly string $command, public readonly string $state)',
             '    {',
-            "        parent::__construct(sprintf('\"%s\" is not allowed while \"%s\"', \$command, \$state));",
+            "        parent::__construct(sprintf('%s is not allowed while \"%s\"', \$command, \$state));",
+            '    }',
+            '',
+            "    public function errorCode(): string",
+            '    {',
+            "        return 'ILLEGAL_TRANSITION';",
+            '    }',
+            '',
+            '    /** @return array<string, string> */',
+            '    public function details(): array',
+            '    {',
+            "        return ['errorCode' => \$this->errorCode(), 'command' => \$this->command];",
             '    }',
             '}',
         ]));
@@ -1383,7 +1402,18 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
             '{',
             '    public function __construct(public readonly string $command, public readonly string $requirement)',
             '    {',
-            "        parent::__construct(sprintf('\"%s\" requires: %s', \$command, \$requirement));",
+            "        parent::__construct(sprintf('%s requires: %s', \$command, \$requirement));",
+            '    }',
+            '',
+            "    public function errorCode(): string",
+            '    {',
+            "        return 'GUARD_VIOLATION';",
+            '    }',
+            '',
+            '    /** @return array<string, string> */',
+            '    public function details(): array',
+            '    {',
+            "        return ['errorCode' => \$this->errorCode(), 'command' => \$this->command];",
             '    }',
             '}',
         ]));
@@ -1394,6 +1424,11 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
             '    public function __construct(public readonly string $subject)',
             '    {',
             "        parent::__construct(sprintf('conflicting write on \"%s\"', \$subject));",
+            '    }',
+            '',
+            "    public function errorCode(): string",
+            '    {',
+            "        return 'CONCURRENCY_CONFLICT';",
             '    }',
             '}',
         ]));

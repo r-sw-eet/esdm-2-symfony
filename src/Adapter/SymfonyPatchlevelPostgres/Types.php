@@ -66,4 +66,14 @@ final class Types
     {
         return $field->jsonType === 'boolean';
     }
+
+    public static function isInteger(Field $field): bool
+    {
+        return $field->jsonType === 'integer';
+    }
+
+    public static function isNumber(Field $field): bool
+    {
+        return $field->jsonType === 'number';
+    }
 }

@@ -219,11 +219,14 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
                 $ns . '\\' . $emitCtx . '\\Application\\' . $aggClass . 'Service',
                 $ns . '\\' . $emitCtx . '\\Domain\\Command\\' . $cmdClass,
                 'Patchlevel\\EventSourcing\\Attribute\\Processor',
+                'Patchlevel\\EventSourcing\\Subscription\\RunMode',
                 'Patchlevel\\EventSourcing\\Attribute\\Subscribe',
             ];
 
             $lines = [
-                '#[Processor(' . $this->q(Str::snake($policy->name)) . ')]',
+                // Processors default to RunMode::FromNow — events appended before the
+                // subscription's first setup would be skipped forever (C4 finding).
+                '#[Processor(' . $this->q(Str::snake($policy->name)) . ', runMode: RunMode::FromBeginning)]',
                 'final class ' . $class,
                 '{',
                 '    public function __construct(private readonly ' . $aggClass . 'Service $' . $serviceProp . ')',
@@ -1012,9 +1015,14 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
 
         $boolCasts = [];
         foreach ($readModel->columns as $column) {
+            $col = Str::snake($column->name);
             if (Types::isBoolean($column)) {
-                $col = Str::snake($column->name);
                 $boolCasts[] = '        $row[' . $this->q($col) . '] = in_array($row[' . $this->q($col) . '], [true, \'t\', \'true\', \'1\', 1], true);';
+            } elseif (Types::isInteger($column)) {
+                // PDO returns numerics as strings; the wire type is the model's type.
+                $boolCasts[] = '        $row[' . $this->q($col) . '] = (int) $row[' . $this->q($col) . '];';
+            } elseif (Types::isNumber($column)) {
+                $boolCasts[] = '        $row[' . $this->q($col) . '] = (float) $row[' . $this->q($col) . '];';
             }
         }
 
@@ -1071,6 +1079,7 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
 
         $uses = [
             $ns . '\\Shared\\DomainViolation',
+            'Patchlevel\\EventSourcing\\Repository\\AggregateNotFound',
             'Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController',
             'Symfony\\Component\\HttpFoundation\\JsonResponse',
             'Symfony\\Component\\HttpFoundation\\Request',
@@ -1159,18 +1168,24 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
 
         if ($command->lifecycle === Lifecycle::Create) {
             $call = '$id = $this->' . $serviceProp . '->' . $method . '(new ' . $cmdClass . '(' . $argList . '));';
-            $success = 'return new JsonResponse([\'id\' => $id], Response::HTTP_CREATED);';
+            $success = 'return new JsonResponse([\'id\' => $id]);';
         } else {
             $call = '$this->' . $serviceProp . '->' . $method . '(new ' . $cmdClass . '(' . $argList . '));';
-            $success = 'return new JsonResponse([\'ok\' => true]);';
+            $success = 'return new JsonResponse([\'id\' => (string) ($data[\'id\'] ?? \'\')]);';
         }
 
         $lines[] = '        try {';
         $lines[] = '            ' . $call;
         $lines[] = '';
         $lines[] = '            ' . $success;
+        if ($command->lifecycle !== Lifecycle::Create) {
+            // Unknown aggregate on a mutate: same wire behavior as the nimbus family —
+            // the state guard fires against an empty state (409, ILLEGAL_TRANSITION).
+            $lines[] = '        } catch (AggregateNotFound) {';
+            $lines[] = '            return new JsonResponse([\'error\' => \'CONFLICT\', \'message\' => ' . $this->q($command->name . ' is not allowed while "undefined"') . ', \'details\' => [\'errorCode\' => \'ILLEGAL_TRANSITION\', \'command\' => ' . $this->q($command->name) . ']], Response::HTTP_CONFLICT);';
+        }
         $lines[] = '        } catch (DomainViolation $e) {';
-        $lines[] = '            return new JsonResponse([\'error\' => $e->getMessage()], Response::HTTP_CONFLICT);';
+        $lines[] = '            return new JsonResponse([\'error\' => \'CONFLICT\', \'message\' => $e->getMessage(), \'details\' => $e->details()], Response::HTTP_CONFLICT);';
         $lines[] = '        }';
         $lines[] = '    }';
 
@@ -1184,6 +1199,7 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
         $routeName = $context->name . '_' . Str::snake($query->name);
         $path = $base . '/' . $query->name;
 
+        $entity = Str::studly($readModel->name);
         if ($query->parameters->fields !== []) {
             return [
                 '    #[Route(' . $this->q($path) . ', name: ' . $this->q($routeName) . ', methods: [\'GET\'])]',
@@ -1192,7 +1208,7 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
                 '        $row = $this->' . $finderProp . '->find((string) $request->query->get(\'id\', \'\'));',
                 '',
                 '        return $row === null',
-                '            ? new JsonResponse([\'error\' => \'not found\'], Response::HTTP_NOT_FOUND)',
+                '            ? new JsonResponse([\'error\' => \'NOT_FOUND\', \'message\' => ' . $this->q($entity . ' not found') . ', \'details\' => [\'errorCode\' => ' . $this->q(strtoupper(Str::snake($readModel->name)) . '_NOT_FOUND') . ', \'reason\' => ' . $this->q('Could not find ' . $entity . ' matching the given filter') . ']], Response::HTTP_NOT_FOUND)',
                 '            : new JsonResponse($row);',
                 '    }',
             ];
@@ -1259,6 +1275,13 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
             '/** Base for domain-rule violations (state machine + guards). Mapped to HTTP 409. */',
             'abstract class DomainViolation extends \\RuntimeException',
             '{',
+            '    abstract public function errorCode(): string;',
+            '',
+            '    /** @return array<string, string> */',
+            '    public function details(): array',
+            '    {',
+            '        return [\'errorCode\' => $this->errorCode()];',
+            '    }',
             '}',
         ]));
         $project->add('src/Shared/IllegalTransition.php', $this->phpFile($ns . '\\Shared', [], [
@@ -1267,7 +1290,18 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
             '{',
             '    public function __construct(public readonly string $command, public readonly string $state)',
             '    {',
-            "        parent::__construct(sprintf('\"%s\" is not allowed while \"%s\"', \$command, \$state));",
+            "        parent::__construct(sprintf('%s is not allowed while \"%s\"', \$command, \$state));",
+            '    }',
+            '',
+            "    public function errorCode(): string",
+            '    {',
+            "        return 'ILLEGAL_TRANSITION';",
+            '    }',
+            '',
+            '    /** @return array<string, string> */',
+            '    public function details(): array',
+            '    {',
+            "        return ['errorCode' => \$this->errorCode(), 'command' => \$this->command];",
             '    }',
             '}',
         ]));
@@ -1277,7 +1311,18 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
             '{',
             '    public function __construct(public readonly string $command, public readonly string $requirement)',
             '    {',
-            "        parent::__construct(sprintf('\"%s\" requires: %s', \$command, \$requirement));",
+            "        parent::__construct(sprintf('%s requires: %s', \$command, \$requirement));",
+            '    }',
+            '',
+            "    public function errorCode(): string",
+            '    {',
+            "        return 'GUARD_VIOLATION';",
+            '    }',
+            '',
+            '    /** @return array<string, string> */',
+            '    public function details(): array',
+            '    {',
+            "        return ['errorCode' => \$this->errorCode(), 'command' => \$this->command];",
             '    }',
             '}',
         ]));
@@ -1432,9 +1477,15 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
               - |
                 php bin/console event-sourcing:schema:create || true
                 php bin/console app:eventstore:hashchain || true
-                php bin/console event-sourcing:subscription:setup || true
-                php bin/console event-sourcing:subscription:boot || true
-                while true; do php bin/console event-sourcing:subscription:run || true; sleep 1; done
+                # setup/boot are idempotent — keep them in the loop so a once-failed setup
+                # or an event appended before the first setup is recovered, never skipped
+                # (C4 finding: pre-setup events were lost forever with one-shot setup/boot).
+                while true; do
+                  php bin/console event-sourcing:subscription:setup || true
+                  php bin/console event-sourcing:subscription:boot || true
+                  php bin/console event-sourcing:subscription:run || true
+                  sleep 1
+                done
 
         # Domain console: this stack serves the 0004 dev contract (/_dev/*) — point the
         # esdm-vue-reader viewer at http://localhost:8080 for commands / read models / events.
