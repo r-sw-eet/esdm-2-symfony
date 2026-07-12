@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Esdm\Generator\Adapter;
 
+use Esdm\Generator\Adapter\SymfonyEventSourcingDb\SymfonyEventSourcingDbAdapter;
 use Esdm\Generator\Adapter\SymfonyPatchlevelPostgres\SymfonyPatchlevelPostgresAdapter;
 
 final class AdapterRegistry
@@ -15,6 +16,7 @@ final class AdapterRegistry
     {
         $registry = new self();
         $registry->register(new SymfonyPatchlevelPostgresAdapter());
+        $registry->register(new SymfonyEventSourcingDbAdapter());
 
         return $registry;
     }

@@ -35,32 +35,45 @@ if [ ${#apps[@]} -eq 0 ]; then
     exit 1
 fi
 
+# Every app is generated with its esdmgen.yaml default target (slug `symfony`)
+# plus every additional registry target, keyed here by output slug.
+declare -A TARGETS=(
+    [symfony]=""                              # esdmgen.yaml's own `target:`
+    [symfony-esdb]="symfony-eventsourcingdb"  # forced via --target
+)
+
 fail=0
 for app_dir in "${apps[@]}"; do
     [ -f "${app_dir}esdmgen.yaml" ] || continue
     app="$(basename "$app_dir")"
 
-    if [ "$CHECK" -eq 1 ]; then
-        gen_out="$WORK/$app/symfony"
-        out_args=(-o "$WORK/$app")
-    else
-        gen_out="${app_dir}generated/symfony"
-        out_args=()   # esdmgen.yaml's `out: generated` → examples/<app>/generated/symfony
-    fi
+    for slug in "${!TARGETS[@]}"; do
+        target="${TARGETS[$slug]}"
+        target_args=()
+        [ -n "$target" ] && target_args=(--target "$target")
 
-    if ! php bin/esdmgen generate "$app_dir" "${out_args[@]}" >/dev/null; then
-        echo "$app: GENERATION FAILED"
-        fail=1
-        continue
-    fi
+        if [ "$CHECK" -eq 1 ]; then
+            gen_out="$WORK/$app/$slug"
+            out_args=(-o "$WORK/$app")
+        else
+            gen_out="${app_dir}generated/$slug"
+            out_args=()   # esdmgen.yaml's `out: generated` → examples/<app>/generated/<slug>
+        fi
 
-    count="$(find "$gen_out" -type f 2>/dev/null | wc -l)"
-    if [ "$count" -lt 10 ]; then
-        echo "$app: SUSPICIOUSLY EMPTY ($count files)"
-        fail=1
-        continue
-    fi
-    echo "$app: $count files"
+        if ! php bin/esdmgen generate "$app_dir" "${out_args[@]}" "${target_args[@]}" >/dev/null; then
+            echo "$app ($slug): GENERATION FAILED"
+            fail=1
+            continue
+        fi
+
+        count="$(find "$gen_out" -type f 2>/dev/null | wc -l)"
+        if [ "$count" -lt 10 ]; then
+            echo "$app ($slug): SUSPICIOUSLY EMPTY ($count files)"
+            fail=1
+            continue
+        fi
+        echo "$app ($slug): $count files"
+    done
 done
 
 exit $fail
