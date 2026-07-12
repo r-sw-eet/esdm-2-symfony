@@ -32,8 +32,8 @@ docs — no local doc mirror is kept):
 | Model / input format | [ESDM](https://www.esdm.io/) + [esdm-extensions](https://github.com/r-sw-eet/esdm-extensions) proposals 0001–0004 |
 | Generator runtime    | [PHP](https://www.php.net/) 8.2+ · [Symfony Console](https://symfony.com/doc/current/components/console.html)     |
 | Generated app        | [Symfony 7](https://symfony.com/) — CQRS, async projections                                                       |
-| Event sourcing       | [patchlevel/event-sourcing](https://event-sourcing.patchlevel.io/)                                                |
-| Persistence          | [Doctrine ORM + DBAL](https://www.doctrine-project.org/) on [PostgreSQL](https://www.postgresql.org/)             |
+| Event sourcing       | [patchlevel/event-sourcing](https://event-sourcing.patchlevel.io/) *or* the official [EventSourcingDB PHP SDK](https://github.com/thenativeweb/eventsourcingdb-client-php), per target |
+| Persistence          | [Doctrine DBAL](https://www.doctrine-project.org/) on [PostgreSQL](https://www.postgresql.org/) *or* [EventSourcingDB](https://www.eventsourcingdb.io/) + [MongoDB](https://www.mongodb.com/), per target |
 
 ## How it works
 
@@ -68,8 +68,12 @@ see https://www.esdm.io/getting-started/installing-esdm/.
 
 ### Adapters (one per framework + db + ES library)
 
-This codegen ships one target: `symfony-patchlevel-postgres` — Symfony 7 +
-patchlevel/event-sourcing + PostgreSQL (CQRS, ES, async projections).
+This codegen ships two targets:
+
+| Target | Stack | Output slug |
+|---|---|---|
+| `symfony-patchlevel-postgres` | Symfony 7 + patchlevel/event-sourcing + PostgreSQL (CQRS, ES, async projections; hash-chained event log) | `generated/symfony` |
+| `symfony-eventsourcingdb` | Symfony 7 + EventSourcingDB (event store) + MongoDB (read models); wire-compatible with the esdm-2-nimbus targets — subject `/<aggregate>/<id>`, type `domain.aggregate.event-name`, `{ payload, nimbusMeta }` data envelope — so a store is interchangeable between codegens | `generated/symfony-esdb` |
 
 Every target — across codegens — emits the same HTTP contract (`POST /<context>/<command>`,
 `GET /<context>/<query>`), so a client can't tell which backend is behind it. Each target writes
@@ -107,6 +111,23 @@ loaded with the app's own diagram (proposal 0003).
 The non-mechanical bits ESDM does not encode (which command *creates* vs *mutates* vs
 *deletes* an aggregate) are derived from a verb heuristic on the document name, overridable
 with an `esdm-extensions.io/lifecycle` annotation.
+
+### What the EventSourcingDB adapter emits — the same kinds, a different runtime
+
+The `symfony-eventsourcingdb` target keeps the app shape and HTTP surface identical but swaps
+the runtime: an `aggregate` becomes a **pure state fold** (`<Agg>State::apply`) plus a **pure
+decider** (`<Agg>::<command>()` — guards in, `DomainEvent`s out); the application service
+replays the subject `/<aggregate>/<id>` from EventSourcingDB, runs the decider and appends
+with a write precondition (`IsSubjectPristine` on create, `IsSubjectPopulated` on mutate —
+violations map to 409). A `read-model` becomes a MongoDB projector (`rm_*` collection,
+`revision` = last projected event id) plus a finder; projections and `policy` reactions run in
+a long-lived `app:observe` worker that streams the store with `observeEvents`. GWT `feature`s
+compile to plain PHPUnit tests over the pure decider.
+
+The **`symfony-patchlevel-postgres`** target additionally hash-chains its event log in-database
+(pgcrypto, `BEFORE INSERT` trigger installed by the generated `app:eventstore:hashchain`
+command); `app:eventstore:verify` audits the chain in pure SQL and exits non-zero at the first
+tampered, deleted or reordered row.
 
 ### Everything comes from the model — no manual-code seam
 
@@ -204,7 +225,7 @@ src/Lint/       esdm lint gate — validates the model before generation
 src/Model/      parse ESDM YAML → resolved, framework-agnostic model
 src/Feel/       FEEL subset compiler (proposal 0002) — parser, compiler, validator
 src/Bpmn/       BPMN → ESDM mapper (proposal 0003) — parser + decomposition
-src/Adapter/    target adapters (symfony-patchlevel-postgres lives here)
+src/Adapter/    target adapters (symfony-patchlevel-postgres, symfony-eventsourcingdb)
 src/Console/    the `esdmgen` CLI (generate, targets, bpmn:map)
 bin/esdmgen     CLI entrypoint
 examples/<name>/    model/ (ESDM input) · authoring/ (optional BPMN) · esdmgen.yaml · generated/<stack>/ (output)
