@@ -3,14 +3,16 @@
 A **code generator** that turns a business-process / domain model — authored as **BPMN**
 (in the bundled bpmn.io editor) or as an [ESDM](https://www.esdm.io/) model (Event-Sourced
 Domain Modeling — YAML documents describing an event-sourced domain) — into a **real,
-runnable application**. This repo is the **PHP codegen** of the BPAG family: its target emits
+runnable application**. This repo is the **PHP codegen** of the ESDM toolchain: it emits
 a **Symfony** app that implements the model with **CQRS**, an **event-driven** read side and
-**event sourcing**, on **PostgreSQL** — using
-[patchlevel/event-sourcing](https://event-sourcing.patchlevel.io/) as the runtime, with
-ideas borrowed from [Nimbus](https://nimbus.overlap.at/) and
+**event sourcing**, with a choice of event store per target: **PostgreSQL** with
+[patchlevel/event-sourcing](https://event-sourcing.patchlevel.io/) as the runtime, or
+**EventSourcingDB** + **MongoDB** via the official
+[EventSourcingDB PHP SDK](https://github.com/thenativeweb/eventsourcingdb-client-php),
+with ideas borrowed from [Nimbus](https://nimbus.overlap.at/) and
 [OpenCQRS](https://github.com/open-cqrs/opencqrs).
 
-> Draw the business process. BPAG makes it run.
+> Draw the business process. The ESDM toolchain makes it run.
 
 ## Related projects
 

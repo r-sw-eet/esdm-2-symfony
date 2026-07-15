@@ -20,7 +20,7 @@ foreach ($autoloads as $autoload) {
     }
 }
 
-$application = new Application('BPAG — Business Process App Generator', '0.1.0');
+$application = new Application('esdmgen - ESDM code generator', '0.1.0');
 $application->add(new GenerateCommand());
 $application->add(new TargetsCommand());
 $application->add(new BpmnMapCommand());
