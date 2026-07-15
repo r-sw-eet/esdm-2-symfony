@@ -28,8 +28,13 @@
         "sort-packages": true
     },
     "scripts": {
-        "test": "phpunit",
+        "test": ["phpunit", "@test:emitted"],
+        "test:emitted": "scripts/emitted-tests.sh",
         "examples": "scripts/examples.sh",
         "smoke": "scripts/examples.sh --check"
+    },
+    "scripts-descriptions": {
+        "test": "Generator unit tests, then run the GWT tests the generator EMITS (needs mbstring — run in the php container).",
+        "test:emitted": "Generate each example's EventSourcingDB target and execute its emitted PHPUnit decider tests."
     }
 }
