@@ -120,7 +120,7 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
             '{',
         ];
         foreach ($aggregate->nonIdentityState() as $field) {
-            $lines[] = '    public ?' . Types::scalarPhpType($field) . ' $' . Str::camel($field->name) . ' = null;';
+            $lines[] = '    public ' . Types::nullablePhpType($field) . ' $' . Str::camel($field->name) . ' = null;';
         }
         if ($aggregate->stateMachine !== null) {
             $lines[] = '    public ?string $status = null;';
@@ -782,6 +782,7 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
     private function commandAction(BoundedContext $context, Command $command, string $serviceProp, string $base): array
     {
         $method = Str::camel($command->name);
+        $action = Str::controllerAction($command->name);
         $cmdClass = Str::studly($command->name);
         $routeName = $context->name . '_' . Str::snake($command->name);
         $path = $base . '/' . $command->name;
@@ -794,7 +795,7 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
 
         $lines = [
             '    #[Route(' . $this->q($path) . ', name: ' . $this->q($routeName) . ', methods: [\'POST\'])]',
-            '    public function ' . $method . '(Request $request): JsonResponse',
+            '    public function ' . $action . '(Request $request): JsonResponse',
             '    {',
             '        $data = $this->payload($request);',
         ];
@@ -822,7 +823,7 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
     /** @return list<string> */
     private function queryAction(BoundedContext $context, Query $query, string $finderProp, string $base): array
     {
-        $method = Str::camel($query->name);
+        $method = Str::controllerAction($query->name);
         $routeName = $context->name . '_' . Str::snake($query->name);
         $path = $base . '/' . $query->name;
 
@@ -1224,15 +1225,29 @@ final class SymfonyEventSourcingDbAdapter implements Adapter
         $lines[] = '';
         $lines[] = '        $events = ' . $call . ';';
         $lines[] = '';
-        $lines[] = '        self::assertSame([';
+
+        // Assert only the fields the scenario declares (subset match). A real event
+        // carries more than the `then` states — a state-machine status, echoed command
+        // inputs — so asserting the full payload against a fabricated default fails
+        // spuriously. Undeclared fields are the decider's business, not the scenario's.
+        $expected = [];
         foreach ($scenario->thenEvents as $example) {
             $ev = $aggregate->event($example->event);
-            if ($ev === null) {
-                continue;
+            if ($ev !== null) {
+                $expected[] = [$ev, $example];
             }
-            $lines[] = '            [' . $eventsClass . '::' . $this->eventConst($ev) . ', ' . $this->dataLiteral($ev, $example->data) . '],';
         }
-        $lines[] = '        ], array_map(static fn (DomainEvent $e): array => [$e->type, $e->data], $events));';
+        $lines[] = '        self::assertCount(' . count($expected) . ', $events);';
+        foreach ($expected as $i => [$ev, $example]) {
+            $lines[] = '        self::assertSame(' . $eventsClass . '::' . $this->eventConst($ev) . ', $events[' . $i . ']->type);';
+            foreach ($ev->data as $field) {
+                if (!array_key_exists($field->name, $example->data)) {
+                    continue;
+                }
+                $lines[] = '        self::assertSame(' . var_export($example->data[$field->name], true)
+                    . ', $events[' . $i . ']->data[' . $this->q(Str::camel($field->name)) . ']);';
+            }
+        }
         $lines[] = '    }';
 
         return $lines;

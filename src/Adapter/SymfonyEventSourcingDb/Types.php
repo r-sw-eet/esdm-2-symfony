@@ -20,6 +20,18 @@ final class Types
         };
     }
 
+    /**
+     * The nullable form of a state property's type. `mixed` already includes
+     * null, so it must NOT be prefixed with `?` (PHP 8 fatal: "Type mixed cannot
+     * be marked as nullable"). Every other scalar becomes `?<type>`.
+     */
+    public static function nullablePhpType(Field $field): string
+    {
+        $type = self::scalarPhpType($field);
+
+        return $type === 'mixed' ? 'mixed' : '?' . $type;
+    }
+
     public static function defaultLiteral(Field $field): string
     {
         if ($field->hasDefault) {

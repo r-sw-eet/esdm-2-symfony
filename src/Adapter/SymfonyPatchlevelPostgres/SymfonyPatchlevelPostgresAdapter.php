@@ -329,7 +329,10 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
             return $lines;
         }
 
-        $then = array_map(fn (EventExample $e): string => $this->eventInstance($aggregate, $e), $scenario->thenEvents);
+        $then = array_map(
+            fn (EventExample $e): string => $this->expectedEventInstance($aggregate, $scenario, $e),
+            $scenario->thenEvents,
+        );
 
         $lines = ['    public function ' . $method . '(): void', '    {', '        $this'];
 
@@ -397,7 +400,43 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
 
         $args = [];
         foreach ($event->data as $field) {
-            $args[] = $this->scalarOrUuid($field, $example->data[$field->name] ?? null);
+            // A `given` seed may leave an optional field implicit; use its default
+            // rather than null, which would TypeError a non-nullable constructor arg.
+            $args[] = $field->isIdentity || array_key_exists($field->name, $example->data)
+                ? $this->scalarOrUuid($field, $example->data[$field->name] ?? null)
+                : Types::defaultLiteral($field);
+        }
+
+        return 'new ' . Str::studly($event->name) . '(' . implode(', ', $args) . ')';
+    }
+
+    /**
+     * The expected event object for a `then` assertion. patchlevel's test harness
+     * asserts released events by full equality, so a field the scenario leaves out
+     * must still carry the value the aggregate records — sourced from the identity,
+     * the command payload or the field default, exactly as the aggregate builds it —
+     * never a fabricated null that would fail the equality (or TypeError a non-null arg).
+     */
+    private function expectedEventInstance(Aggregate $aggregate, Scenario $scenario, EventExample $example): string
+    {
+        $event = $aggregate->event($example->event);
+        if ($event === null) {
+            return 'null';
+        }
+
+        $createSource = $this->createEventData($scenario, $event);
+
+        $args = [];
+        foreach ($event->data as $field) {
+            if (array_key_exists($field->name, $example->data)) {
+                $args[] = $this->scalarOrUuid($field, $example->data[$field->name]);
+            } elseif ($field->isIdentity) {
+                $args[] = $this->scalarOrUuid($field, $scenario->commandData[$field->name] ?? $createSource[$field->name] ?? null);
+            } elseif (array_key_exists($field->name, $scenario->commandData)) {
+                $args[] = var_export($scenario->commandData[$field->name], true);
+            } else {
+                $args[] = Types::defaultLiteral($field);
+            }
         }
 
         return 'new ' . Str::studly($event->name) . '(' . implode(', ', $args) . ')';
@@ -1148,6 +1187,7 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
     private function commandAction(BoundedContext $context, Command $command, string $serviceProp, string $base): array
     {
         $method = Str::camel($command->name);
+        $action = Str::controllerAction($command->name);
         $cmdClass = Str::studly($command->name);
         $routeName = $context->name . '_' . Str::snake($command->name);
         $path = $base . '/' . $command->name;
@@ -1161,7 +1201,7 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
 
         $lines = [
             '    #[Route(' . $this->q($path) . ', name: ' . $this->q($routeName) . ', methods: [\'POST\'])]',
-            '    public function ' . $method . '(Request $request): JsonResponse',
+            '    public function ' . $action . '(Request $request): JsonResponse',
             '    {',
             '        $data = $this->payload($request);',
         ];
@@ -1195,7 +1235,7 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
     /** @return list<string> */
     private function queryAction(BoundedContext $context, Query $query, ReadModel $readModel, string $finderProp, string $base): array
     {
-        $method = Str::camel($query->name);
+        $method = Str::controllerAction($query->name);
         $routeName = $context->name . '_' . Str::snake($query->name);
         $path = $base . '/' . $query->name;
 

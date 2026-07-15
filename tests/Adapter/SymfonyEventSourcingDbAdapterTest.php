@@ -151,7 +151,7 @@ final class SymfonyEventSourcingDbAdapterTest extends TestCase
         $task = $files['src/Tasks/Domain/Task.php'];
 
         self::assertStringContainsString("if (!in_array(\$state->status, ['open'], true)) {", $task);
-        self::assertStringContainsString("throw new IllegalTransition('delete-task', (string) \$state->status);", $task);
+        self::assertStringContainsString("throw new IllegalTransition('delete-task', (\$state->status ?? '') === '' ? 'undefined' : (string) \$state->status);", $task);
         // only the guarded transition throws; the create path carries no guard
         self::assertSame(1, substr_count($task, 'throw new IllegalTransition'));
         self::assertArrayHasKey('src/Shared/IllegalTransition.php', $files);
