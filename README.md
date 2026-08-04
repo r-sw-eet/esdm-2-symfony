@@ -40,16 +40,17 @@ docs — no local doc mirror is kept):
 ## How it works
 
 ```
-BPMN diagram ──bpmn:map──▶ ESDM YAML ──lint──▶ parse ──▶ resolved Model ──map+emit──▶ runnable project
+BPMN diagram ─bpmn-2-esdm─▶ ESDM YAML ──lint──▶ parse ──▶ resolved Model ──map+emit──▶ runnable project
 (authoring/)   (optional)   (model/)   (gate)   (framework-agnostic)                   (an adapter's output)
 ```
 
 The model can be authored two ways — **drawn as BPMN** (then compiled to ESDM with
-`esdmgen bpmn:map`, proposal 0003) or **written as ESDM YAML** by hand. From the ESDM model
+[bpmn-2-esdm](https://github.com/r-sw-eet/bpmn-2-esdm), proposal 0003) or **written as ESDM YAML**
+by hand. From the ESDM model
 onward the pipeline is identical:
 
 0. **Author** *(optional)* — draw the business process as BPMN (in the bundled bpmn.io editor or
-   any Camunda Modeler) and run `esdmgen bpmn:map` to decompose it into ESDM. See *Authoring from
+   any Camunda Modeler) and run `bpmn-2-esdm` to decompose it into ESDM. See *Authoring from
    BPMN* below. Or skip this and write the ESDM model directly.
 1. **Lint** — before anything else, `esdmgen generate` runs the upstream `esdm lint` over
    the model directory and **aborts on any error**. The generator's own parser is lax by
@@ -154,7 +155,7 @@ command/projection hook seam existed briefly and was removed for exactly this re
 
 ```sh
 # 1. compile the BPMN to ESDM, then generate the Symfony app
-docker compose run --rm codegen bpmn:map examples/orders    # authoring/order.bpmn → model/*.yaml
+bpmn-2-esdm examples/orders                                # authoring/order.bpmn → model/*.yaml
 docker compose run --rm codegen generate examples/orders    # ESDM → runnable project
 
 # 2. run it: PostgreSQL + write/query API + async projection worker
@@ -185,14 +186,14 @@ needs pure-PHP dependencies.
 ## Example apps (`examples/`)
 
 Each app is a self-contained model plus its generated output: the first two are written as ESDM
-YAML, the rest are **drawn as BPMN** (under `authoring/`) and compiled with `bpmn:map`. They get
+YAML, the rest are **drawn as BPMN** (under `authoring/`) and compiled with `bpmn-2-esdm`. They get
 progressively more complex to push the generator further.
 
 | App                      | Demonstrates                                                                                                                                                                                                                                                                                                                                                                               |
 |--------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `examples/todo`          | one aggregate; commands/events; **two read models** from one log (active + a `deleted-tasks` archive); GWT scenarios; the 0004 console contract                                                                                                                                                                                                                                            |
 | `examples/manufacturing` | RFQ→quote: **two bounded contexts** (intake, quoting), two aggregates, an event-driven **`policy`** (a website request auto-drafts a quote), numeric fields, status lifecycle, GWT                                                                                                                                                                                                         |
-| `examples/orders`        | **authored as BPMN** (proposal 0003): `authoring/order.bpmn` → `esdmgen bpmn:map` → ESDM → code. State machine + FEEL guard (`ship-order when paidAmount >= total`) are derived from the flow graph + a condition expression                                                                                                                                                               |
+| `examples/orders`        | **authored as BPMN** (proposal 0003): `authoring/order.bpmn` → `bpmn-2-esdm` → ESDM → code. State machine + FEEL guard (`ship-order when paidAmount >= total`) are derived from the flow graph + a condition expression                                                                                                                                                               |
 | `examples/commerce`      | a two-pool collaboration (Sales + Warehouse) → **two contexts/aggregates**, two state machines, two FEEL guards, and a **cross-pool message flow → `policy`** (approving an order auto-registers a shipment)                                                                                                                                                                               |
 | `examples/factory`       | **the big one** — a five-pool collaboration (Sales · Production · Quality Control · Warehouse · Accounting) → **5 contexts/aggregates**, 5 state machines, FEEL guards, a **quality-gate loop** (fail → rework → re-inspect) and an XOR credit decision, plus a **4-policy chain** threading an order all the way to a settled invoice. One `factory.bpmn`, editable in the **Author** tab |
 
@@ -202,12 +203,14 @@ progressively more complex to push the generator further.
 ## Authoring from BPMN (proposal 0003)
 
 For a non-programmer audience, the ESDM model itself can be *generated* from a **BPMN** diagram
-(drawn in any bpmn.io / Camunda Modeler editor) instead of hand-written. `esdmgen bpmn:map`
-decomposes the diagram into the three ESDM streams — core, [0001] state machine, [0002] FEEL —
-and writes them to `model/`, ready for `generate`:
+(drawn in any bpmn.io / Camunda Modeler editor) instead of hand-written.
+[bpmn-2-esdm](https://github.com/r-sw-eet/bpmn-2-esdm) decomposes the diagram into the three ESDM
+streams — core, [0001] state machine, [0002] FEEL — and writes them to `model/`, ready for
+`generate`. It is a separate tool because its output is stack-agnostic ESDM: the same mapper feeds
+every generator in the family, and this repo's own copy moved there.
 
 ```sh
-docker compose run --rm codegen bpmn:map examples/orders   # examples/orders/authoring/*.bpmn → examples/orders/model/*.yaml
+bpmn-2-esdm examples/orders                               # examples/orders/authoring/*.bpmn → examples/orders/model/*.yaml
 docker compose run --rm codegen generate examples/orders   # ESDM → runnable app (as usual)
 ```
 
@@ -228,7 +231,7 @@ src/Model/      parse ESDM YAML → resolved, framework-agnostic model
 src/Feel/       FEEL subset compiler (proposal 0002) — parser, compiler, validator
 src/Bpmn/       BPMN → ESDM mapper (proposal 0003) — parser + decomposition
 src/Adapter/    target adapters (symfony-patchlevel-postgres, symfony-eventsourcingdb)
-src/Console/    the `esdmgen` CLI (generate, targets, bpmn:map)
+src/Console/    the `esdmgen` CLI (generate, targets)
 bin/esdmgen     CLI entrypoint
 examples/<name>/    model/ (ESDM input) · authoring/ (optional BPMN) · esdmgen.yaml · generated/<stack>/ (output)
 docker/Dockerfile  the generator's own container image
