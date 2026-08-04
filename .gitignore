@@ -15,3 +15,6 @@ examples/*/generated/
 /CLAUDE.md
 /LOCKS.md
 .c4work/
+
+# Internal thinking stays out of a public repo (see ~/PhpstormProjects/CLAUDE.md)
+journal/
