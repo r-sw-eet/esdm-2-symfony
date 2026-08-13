@@ -113,10 +113,13 @@ state:
   properties:
     id: { type: string }
     requestId: { type: string }
+    customerName: { type: string, default: "" }
+    product: { type: string, default: "" }
+    quantity: { type: integer, default: 0 }
     amount: { type: number, default: 0 }
     currency: { type: string, default: EUR }
     validUntil: { type: string, default: "" }
-  required: [id, requestId, amount, currency, validUntil]
+  required: [id, requestId, customerName, product, quantity, amount, currency, validUntil]
 ---
 apiVersion: schema.esdm.io/core/v1
 kind: event
@@ -130,8 +133,11 @@ data:
   properties:
     id: { type: string }
     requestId: { type: string }
+    customerName: { type: string }
+    product: { type: string }
+    quantity: { type: integer }
     status: { type: string, default: drafted }
-  required: [id, requestId, status]
+  required: [id, requestId, customerName, product, quantity, status]
 ---
 apiVersion: schema.esdm.io/core/v1
 kind: event
@@ -198,11 +204,17 @@ scope:
   domain: manufacturing
   boundedContext: quoting
   aggregate: quote
+# Emitted by the draft-quote-on-request policy. The payload carries a deliberate
+# SUBSET of the request - customerEmail stays in intake - so the reaction is a
+# mapping and not a copy of the handled event.
 data:
   type: object
   properties:
     requestId: { type: string }
-  required: [requestId]
+    customerName: { type: string }
+    product: { type: string }
+    quantity: { type: integer }
+  required: [requestId, customerName, product, quantity]
 publishes:
   - quote-drafted
 ---
@@ -273,6 +285,13 @@ publishes:
 apiVersion: schema.esdm.io/core/v1
 kind: policy
 name: draft-quote-on-request
+# The reaction's payload, declared rather than left to each generator's convention
+# (esdm-extensions proposal 0005). This states exactly what the convention already did,
+# so the emitted apps are byte-identical - it is the conformance suite's only coverage
+# of the mapping path.
+metadata:
+  annotations:
+    esdm-extensions.io/mapping: "{ requestId: id, customerName: customerName, product: product, quantity: quantity }"
 scope:
   domain: manufacturing
 deliveryGuarantee: at-most-once
@@ -284,6 +303,9 @@ emits:
   - boundedContext: quoting
     aggregate: quote
     command: draft-quote
+constraints:
+  - name: only-for-a-positive-quantity
+    rule: quantity > 0
 ---
 # ---- read models ----------------------------------------------------------
 apiVersion: schema.esdm.io/core/v1
@@ -324,16 +346,19 @@ schema:
   properties:
     id: { type: string }
     requestId: { type: string }
+    customerName: { type: string, default: "" }
+    product: { type: string, default: "" }
+    quantity: { type: integer, default: 0 }
     amount: { type: number, default: 0 }
     currency: { type: string, default: EUR }
     status: { type: string }
     validUntil: { type: string, default: "" }
-  required: [id, requestId, amount, currency, status, validUntil]
+  required: [id, requestId, customerName, product, quantity, amount, currency, status, validUntil]
 projections:
   - boundedContext: quoting
     aggregate: quote
     event: quote-drafted
-    rule: Insert a row in status drafted.
+    rule: Insert a row in status drafted, carrying the fields the policy mapped over from the request.
   - boundedContext: quoting
     aggregate: quote
     event: quote-priced
