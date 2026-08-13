@@ -6,6 +6,7 @@ namespace Esdm\Generator\Console;
 
 use Esdm\Generator\Adapter\AdapterRegistry;
 use Esdm\Generator\Feel\Feel;
+use Esdm\Generator\Feel\Mapping;
 use Esdm\Generator\Feel\FeelException;
 use Esdm\Generator\Lint\EsdmLinter;
 use Esdm\Generator\Lint\LintResult;
@@ -72,6 +73,10 @@ final class GenerateCommand extends Command
         $model = (new ModelFactory())->create($documents);
 
         if (!$input->getOption('skip-lint') && !$this->validateFeel($io, $model)) {
+            return Command::FAILURE;
+        }
+
+        if (!$input->getOption('skip-lint') && !$this->validateReactionMappings($io, $model)) {
             return Command::FAILURE;
         }
 
@@ -201,6 +206,88 @@ final class GenerateCommand extends Command
             $io->writeln('  <error>error</error> ' . $error);
         }
         $io->error('FEEL guard expressions are invalid — aborting before generation.');
+
+        return false;
+    }
+
+    /**
+     * Reaction mapping gate (proposal 0005): a policy's `esdm-extensions.io/mapping` may assign
+     * only fields the emitted command declares, must produce every required one, and its
+     * expressions bind against the handled event's payload.
+     */
+    private function validateReactionMappings(SymfonyStyle $io, Model $model): bool
+    {
+        $errors = [];
+        foreach ($model->policies as $policy) {
+            if ($policy->mapping === '') {
+                continue;
+            }
+            $handled = $model->aggregate($policy->handleContext, $policy->handleAggregate);
+            $emitting = $model->aggregate($policy->emitContext, $policy->emitAggregate);
+            if ($handled === null || $emitting === null) {
+                continue;
+            }
+            $event = $handled->event($policy->handleEvent);
+            $command = null;
+            foreach ($emitting->commands as $candidate) {
+                if ($candidate->name === $policy->emitCommand) {
+                    $command = $candidate;
+                }
+            }
+            if ($event === null || $command === null) {
+                continue;
+            }
+
+            try {
+                $mapping = Mapping::parse($policy->mapping);
+            } catch (FeelException $e) {
+                $errors[] = $policy->name . ': ' . $e->getMessage();
+                continue;
+            }
+
+            $declared = [];
+            foreach ($command->data as $field) {
+                $declared[] = $field->name;
+            }
+            foreach (array_keys($mapping) as $key) {
+                if (!in_array($key, $declared, true) && $key !== $emitting->identityField) {
+                    $errors[] = sprintf(
+                        '%s: "%s" is not a field of command "%s" (declared: %s)',
+                        $policy->name,
+                        $key,
+                        $command->name,
+                        $declared === [] ? 'nothing' : implode(', ', $declared),
+                    );
+                }
+            }
+            foreach ($command->data as $field) {
+                if ($field->required && !isset($mapping[$field->name])) {
+                    $errors[] = sprintf(
+                        '%s: required field "%s" of command "%s" is not assigned by the mapping',
+                        $policy->name,
+                        $field->name,
+                        $command->name,
+                    );
+                }
+            }
+            $bindable = [];
+            foreach ($event->data as $field) {
+                $bindable[] = $field->name;
+            }
+            foreach (Mapping::validate($mapping, $bindable) as $error) {
+                $errors[] = $policy->name . ': ' . $error;
+            }
+        }
+
+        if ($errors === []) {
+            return true;
+        }
+
+        $io->section('Reaction mapping validation');
+        foreach ($errors as $error) {
+            $io->writeln('  <error>error</error> ' . $error);
+        }
+        $io->error('Reaction mappings are invalid — aborting before generation.');
 
         return false;
     }

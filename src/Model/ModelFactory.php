@@ -13,6 +13,7 @@ namespace Esdm\Generator\Model;
 final class ModelFactory
 {
     private const LIFECYCLE_ANNOTATION = 'esdm-extensions.io/lifecycle';
+    private const MAPPING_ANNOTATION = 'esdm-extensions.io/mapping';
 
     /** @param list<array<string, mixed>> $documents */
     public function create(array $documents): Model
@@ -222,6 +223,7 @@ final class ModelFactory
                 emitContext: (string) ($emit['boundedContext'] ?? 'default'),
                 emitAggregate: (string) $emit['aggregate'],
                 emitCommand: (string) ($emit['command'] ?? ''),
+                mapping: $this->annotation($document, self::MAPPING_ANNOTATION) ?? '',
             );
         }
 

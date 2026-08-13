@@ -21,6 +21,8 @@ final class Policy
         public readonly string $emitContext,
         public readonly string $emitAggregate,
         public readonly string $emitCommand,
+        /** Raw `esdm-extensions.io/mapping` (proposal 0005); empty = the default convention. */
+        public readonly string $mapping = '',
     ) {
     }
 }

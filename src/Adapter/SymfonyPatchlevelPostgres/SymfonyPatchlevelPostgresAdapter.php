@@ -7,6 +7,7 @@ namespace Esdm\Generator\Adapter\SymfonyPatchlevelPostgres;
 use Esdm\Generator\Adapter\Adapter;
 use Esdm\Generator\Adapter\GeneratedProject;
 use Esdm\Generator\Feel\Feel;
+use Esdm\Generator\Feel\Mapping;
 use Esdm\Generator\Model\Aggregate;
 use Esdm\Generator\Model\BoundedContext;
 use Esdm\Generator\Model\Command;
@@ -200,9 +201,22 @@ final class SymfonyPatchlevelPostgresAdapter implements Adapter
 
             // Map the emitted command's fields from the trigger event: the trigger
             // aggregate's identity is exposed as <aggregate>Id, the rest by name.
+            // A declared mapping (proposal 0005) wins per field; the rest falls back to the
+            // convention below, which is what that proposal documents as the default.
+            $mapping = $policy->mapping === '' ? [] : Mapping::parse($policy->mapping);
+            $resolve = static function (string $name) use ($event): string {
+                $f = $event->data->field($name);
+                $access = '$event->' . Str::camel($name);
+
+                // Identities are value objects on this target, exactly as the fallback below assumes.
+                return $f !== null && $f->isIdentity ? $access . '->toString()' : $access;
+            };
+
             $args = [];
             foreach ($command->data as $field) {
-                if ($field->name === $targetIdName) {
+                if (isset($mapping[$field->name])) {
+                    $args[] = Feel::compile($mapping[$field->name], $resolve)['php'];
+                } elseif ($field->name === $targetIdName) {
                     $args[] = '$event->' . $handleIdProp . '->toString()';
                 } elseif ($event->data->has($field->name)) {
                     $f = $event->data->field($field->name);
