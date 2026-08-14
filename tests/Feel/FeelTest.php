@@ -124,4 +124,25 @@ final class FeelTest extends TestCase
         // a zero divisor must not raise DivisionByZeroError: NAN makes the comparison false
         self::assertStringContainsString('NAN', $compiled['php']);
     }
+
+    public function testConditionalsParseBindAndCompile(): void
+    {
+        $expression = 'if quantity > 1 then amount * quantity >= 5000 else amount >= 99999';
+
+        self::assertSame('cond', Feel::parse($expression)['t']);
+        self::assertSame(
+            [],
+            Feel::validate(Feel::parse($expression), ['amount', 'quantity'], ['amount' => 'number', 'quantity' => 'integer']),
+        );
+
+        $compiled = Feel::compile(Feel::parse($expression), static fn (string $n): string => '$this->' . $n);
+        self::assertStringContainsString(' ? ', $compiled['php']);
+    }
+
+    public function testAConditionalWithoutAnElseIsRejected(): void
+    {
+        $this->expectException(FeelException::class);
+
+        Feel::parse('if a then b');
+    }
 }

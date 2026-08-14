@@ -73,6 +73,24 @@ final class Parser
     /** @return array<string, mixed> */
     private function parseOr(): array
     {
+        // `if` sits at the lowest precedence, so its branches are whole expressions and it needs
+        // no parentheses to hold them.
+        if ($this->isKeyword('if')) {
+            $this->advance();
+            $condition = $this->parseOr();
+            if (!$this->isKeyword('then')) {
+                throw new FeelException('Expected "then" in a conditional');
+            }
+            $this->advance();
+            $whenTrue = $this->parseOr();
+            if (!$this->isKeyword('else')) {
+                throw new FeelException('Expected "else" in a conditional');
+            }
+            $this->advance();
+
+            return ['t' => 'cond', 'c' => $condition, 'a' => $whenTrue, 'b' => $this->parseOr()];
+        }
+
         $left = $this->parseAnd();
         while ($this->isKeyword('or')) {
             $this->advance();

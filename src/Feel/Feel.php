@@ -72,6 +72,10 @@ final class Feel
             self::arithmetic($node['r'], $types, $errors);
         } elseif ($t === 'not' || $t === 'neg') {
             self::arithmetic($node['e'], $types, $errors);
+        } elseif ($t === 'cond') {
+            self::arithmetic($node['c'], $types, $errors);
+            self::arithmetic($node['a'], $types, $errors);
+            self::arithmetic($node['b'], $types, $errors);
         } elseif ($t === 'in') {
             self::arithmetic($node['e'], $types, $errors);
             foreach ($node['list'] as $item) {
@@ -118,6 +122,9 @@ final class Feel
             'bool' => $node['v'] ? 'true' : 'false',
             'null' => 'null',
             'neg' => '-(' . self::emit($node['e'], $idToPhp, $uses) . ')',
+            'cond' => '(' . self::emit($node['c'], $idToPhp, $uses) . ' ? '
+                . self::emit($node['a'], $idToPhp, $uses) . ' : '
+                . self::emit($node['b'], $idToPhp, $uses) . ')',
             'call' => self::clockVar($node['fn'], $uses),
             default => 'null',
         };
@@ -196,7 +203,13 @@ final class Feel
                 self::bind($node['r'], $allowed, $errors);
                 break;
             case 'not':
+            case 'neg':
                 self::bind($node['e'], $allowed, $errors);
+                break;
+            case 'cond':
+                self::bind($node['c'], $allowed, $errors);
+                self::bind($node['a'], $allowed, $errors);
+                self::bind($node['b'], $allowed, $errors);
                 break;
             case 'in':
                 self::bind($node['e'], $allowed, $errors);
