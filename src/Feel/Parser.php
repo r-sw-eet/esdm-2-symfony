@@ -174,6 +174,13 @@ final class Parser
                 return ['t' => 'bool', 'v' => $lower === 'true'];
             }
 
+            // Without this, `null` lexes as a name and binds as an unknown field.
+            if ($lower === 'null') {
+                $this->advance();
+
+                return ['t' => 'null'];
+            }
+
             if ($lower === 'today' || $lower === 'now') {
                 $this->advance();
                 $this->eat('(');

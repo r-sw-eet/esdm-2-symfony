@@ -80,4 +80,21 @@ final class FeelTest extends TestCase
         $paid = Feel::compile(Feel::parse('paid = true'), $idToPhp);
         self::assertSame('($paid == true)', $paid['php']);
     }
+
+    public function testNullIsALiteralAndNotAFieldName(): void
+    {
+        $ast = Feel::parse('cancelledAt = null');
+
+        self::assertSame('null', $ast['r']['t']);
+        // `null` used to lex as a name, so this reported: unknown field "null".
+        self::assertSame([], Feel::validate($ast, ['cancelledAt']));
+    }
+
+    public function testComparisonAgainstNullIsIdentityNotLooseEquality(): void
+    {
+        // PHP says 0 == null, so a loose comparison would make `amount = null` true for zero.
+        $compiled = Feel::compile(Feel::parse('amount = null'), static fn (string $n): string => '$this->' . $n);
+
+        self::assertStringContainsString('===', $compiled['php']);
+    }
 }

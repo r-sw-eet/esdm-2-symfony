@@ -53,7 +53,9 @@ final class Feel
             'or' => '(' . self::emit($node['l'], $idToPhp, $uses) . ' || ' . self::emit($node['r'], $idToPhp, $uses) . ')',
             'and' => '(' . self::emit($node['l'], $idToPhp, $uses) . ' && ' . self::emit($node['r'], $idToPhp, $uses) . ')',
             'not' => '!(' . self::emit($node['e'], $idToPhp, $uses) . ')',
-            'bin' => '(' . self::emit($node['l'], $idToPhp, $uses) . ' ' . self::phpOperator($node['op']) . ' ' . self::emit($node['r'], $idToPhp, $uses) . ')',
+            'bin' => '(' . self::emit($node['l'], $idToPhp, $uses) . ' '
+                . self::phpOperator($node['op'], self::comparesToNull($node)) . ' '
+                . self::emit($node['r'], $idToPhp, $uses) . ')',
             'in' => 'in_array(' . self::emit($node['e'], $idToPhp, $uses) . ', ['
                 . implode(', ', array_map(fn (array $x): string => self::emit($x, $idToPhp, $uses), $node['list']))
                 . '], true)',
@@ -61,17 +63,31 @@ final class Feel
             'str' => var_export($node['v'], true),
             'num' => var_export($node['v'], true),
             'bool' => $node['v'] ? 'true' : 'false',
+            'null' => 'null',
             'call' => self::clockVar($node['fn'], $uses),
             default => 'null',
         };
     }
 
-    private static function phpOperator(string $op): string
+    /**
+     * PHP's loose equality makes `0 == null` and `'' == null` both true, so a FEEL comparison
+     * against the null literal must be identity - otherwise `amount = null` holds for a zero
+     * amount. Everything else keeps loose equality, which is what makes an int field and a float
+     * literal compare as FEEL expects.
+     */
+    private static function phpOperator(string $op, bool $againstNull = false): string
     {
         return match ($op) {
-            '=' => '==',
+            '=' => $againstNull ? '===' : '==',
+            '!=' => $againstNull ? '!==' : '!=',
             default => $op,
         };
+    }
+
+    /** @param array<string, mixed> $node */
+    private static function comparesToNull(array $node): bool
+    {
+        return ($node['l']['t'] ?? null) === 'null' || ($node['r']['t'] ?? null) === 'null';
     }
 
     /** @param array{today: bool, now: bool} $uses */
