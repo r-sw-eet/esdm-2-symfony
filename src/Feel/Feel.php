@@ -35,12 +35,67 @@ final class Feel
      * @param list<string> $allowedFields
      * @return list<string> binding errors (empty = valid)
      */
-    public static function validate(array $ast, array $allowedFields): array
+    public static function validate(array $ast, array $allowedFields, array $fieldTypes = []): array
     {
         $errors = [];
         self::bind($ast, $allowedFields, $errors);
+        self::arithmetic($ast, $fieldTypes, $errors);
 
         return $errors;
+    }
+
+    private const ARITHMETIC = ['+', '-', '*', '/'];
+
+    /**
+     * The arithmetic gates of 0002's 2026-08-14 amendment: an operand declared `string` or
+     * `boolean` is not arithmetic, and a literal zero divisor never is. An absent type is skipped.
+     *
+     * @param array<string, mixed> $node
+     * @param array<string, string> $types
+     * @param list<string> $errors
+     */
+    private static function arithmetic(array $node, array $types, array &$errors): void
+    {
+        $t = $node['t'] ?? '';
+        if ($t === 'bin') {
+            if (in_array($node['op'], self::ARITHMETIC, true)) {
+                self::operand($node['l'], $types, $errors);
+                self::operand($node['r'], $types, $errors);
+                if ($node['op'] === '/' && ($node['r']['t'] ?? '') === 'num' && (float) $node['r']['v'] === 0.0) {
+                    $errors[] = 'division by a literal zero';
+                }
+            }
+            self::arithmetic($node['l'], $types, $errors);
+            self::arithmetic($node['r'], $types, $errors);
+        } elseif ($t === 'or' || $t === 'and') {
+            self::arithmetic($node['l'], $types, $errors);
+            self::arithmetic($node['r'], $types, $errors);
+        } elseif ($t === 'not' || $t === 'neg') {
+            self::arithmetic($node['e'], $types, $errors);
+        } elseif ($t === 'in') {
+            self::arithmetic($node['e'], $types, $errors);
+            foreach ($node['list'] as $item) {
+                self::arithmetic($item, $types, $errors);
+            }
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $node
+     * @param array<string, string> $types
+     * @param list<string> $errors
+     */
+    private static function operand(array $node, array $types, array &$errors): void
+    {
+        if (($node['t'] ?? '') === 'id') {
+            $type = $types[$node['name']] ?? null;
+            if ($type === 'string' || $type === 'boolean') {
+                $errors[] = sprintf('arithmetic on the %s field "%s"', $type, $node['name']);
+            }
+        }
+        if (($node['t'] ?? '') === 'str' || ($node['t'] ?? '') === 'bool') {
+            $errors[] = 'arithmetic on a ' . ($node['t'] === 'str' ? 'string' : 'boolean') . ' literal';
+        }
     }
 
     /**
@@ -53,9 +108,7 @@ final class Feel
             'or' => '(' . self::emit($node['l'], $idToPhp, $uses) . ' || ' . self::emit($node['r'], $idToPhp, $uses) . ')',
             'and' => '(' . self::emit($node['l'], $idToPhp, $uses) . ' && ' . self::emit($node['r'], $idToPhp, $uses) . ')',
             'not' => '!(' . self::emit($node['e'], $idToPhp, $uses) . ')',
-            'bin' => '(' . self::emit($node['l'], $idToPhp, $uses) . ' '
-                . self::phpOperator($node['op'], self::comparesToNull($node)) . ' '
-                . self::emit($node['r'], $idToPhp, $uses) . ')',
+            'bin' => self::binary($node, $idToPhp, $uses),
             'in' => 'in_array(' . self::emit($node['e'], $idToPhp, $uses) . ', ['
                 . implode(', ', array_map(fn (array $x): string => self::emit($x, $idToPhp, $uses), $node['list']))
                 . '], true)',
@@ -76,6 +129,24 @@ final class Feel
      * amount. Everything else keeps loose equality, which is what makes an int field and a float
      * literal compare as FEEL expects.
      */
+    /**
+     * @param array<string, mixed> $node
+     * @param array{today: bool, now: bool} $uses
+     */
+    private static function binary(array $node, \Closure $idToPhp, array &$uses): string
+    {
+        $left = self::emit($node['l'], $idToPhp, $uses);
+        $right = self::emit($node['r'], $idToPhp, $uses);
+
+        // FEEL yields null on a zero divisor and null in a predicate is false; NAN carries that,
+        // since every comparison against NAN is false in PHP - and it avoids DivisionByZeroError.
+        if ($node['op'] === '/') {
+            return '((' . $right . ') == 0 ? NAN : ' . $left . ' / ' . $right . ')';
+        }
+
+        return '(' . $left . ' ' . self::phpOperator($node['op'], self::comparesToNull($node)) . ' ' . $right . ')';
+    }
+
     private static function phpOperator(string $op, bool $againstNull = false): string
     {
         return match ($op) {

@@ -97,13 +97,13 @@ final class Parser
     /** @return array<string, mixed> */
     private function parseComparison(): array
     {
-        $left = $this->parsePrimary();
+        $left = $this->parseAdditive();
         $token = $this->peek();
 
         if ($token['type'] === 'op' && in_array($token['value'], self::COMPARISONS, true)) {
             $this->advance();
 
-            return ['t' => 'bin', 'op' => $token['value'], 'l' => $left, 'r' => $this->parsePrimary()];
+            return ['t' => 'bin', 'op' => $token['value'], 'l' => $left, 'r' => $this->parseAdditive()];
         }
 
         if ($this->isKeyword('in')) {
@@ -116,13 +116,47 @@ final class Parser
         // compiler in the family unaware that it exists.
         if ($this->isKeyword('between')) {
             $this->advance();
-            $low = $this->parsePrimary();
+            $low = $this->parseAdditive();
             if (!$this->isKeyword('and')) {
                 throw new FeelException('Expected "and" in a between expression');
             }
             $this->advance();
 
-            return self::range($left, $low, $this->parsePrimary());
+            return self::range($left, $low, $this->parseAdditive());
+        }
+
+        return $left;
+    }
+
+    /**
+     * Left-associative, and binding tighter than any comparison.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseAdditive(): array
+    {
+        $left = $this->parseMultiplicative();
+        while ($this->at('+') || $this->at('-')) {
+            $op = $this->peek()['value'];
+            $this->advance();
+            $left = ['t' => 'bin', 'op' => $op, 'l' => $left, 'r' => $this->parseMultiplicative()];
+        }
+
+        return $left;
+    }
+
+    /**
+     * Binds tighter than `+` and `-`.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseMultiplicative(): array
+    {
+        $left = $this->parsePrimary();
+        while ($this->at('*') || $this->at('/')) {
+            $op = $this->peek()['value'];
+            $this->advance();
+            $left = ['t' => 'bin', 'op' => $op, 'l' => $left, 'r' => $this->parsePrimary()];
         }
 
         return $left;

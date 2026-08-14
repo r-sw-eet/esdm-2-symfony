@@ -182,13 +182,18 @@ final class GenerateCommand extends Command
             }
             $allowed = array_map(static fn ($field) => $field->name, $aggregate->state->fields);
             $allowed[] = 'status';
+            // The arithmetic gate needs the declared types, which the binder never had.
+            $types = [];
+            foreach ($aggregate->state->fields as $field) {
+                $types[$field->name] = $field->jsonType;
+            }
 
             foreach ($aggregate->stateMachine->admits as $admit) {
                 if ($admit->when === null || $admit->when === '') {
                     continue;
                 }
                 try {
-                    foreach (Feel::validate(Feel::parse($admit->when), $allowed) as $error) {
+                    foreach (Feel::validate(Feel::parse($admit->when), $allowed, $types) as $error) {
                         $errors[] = sprintf('%s.when "%s": %s', $admit->command, $admit->when, $error);
                     }
                 } catch (FeelException $e) {

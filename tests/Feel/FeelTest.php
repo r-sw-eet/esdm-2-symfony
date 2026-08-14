@@ -111,11 +111,17 @@ final class FeelTest extends TestCase
         self::assertSame($expected, Feel::parse('qty in [1..10]'));
     }
 
-    public function testMembershipStaysMembershipAndBinaryMinusWaitsForArithmetic(): void
+    public function testMembershipStaysMembership(): void
     {
         self::assertSame('in', Feel::parse('status in ["a", "b"]')['t']);
+    }
 
-        $this->expectException(FeelException::class);
-        Feel::parse('a - b');
+    public function testArithmeticPrecedenceAndSafeDivision(): void
+    {
+        self::assertSame(Feel::parse('x = 1 + (2 * 3)'), Feel::parse('x = 1 + 2 * 3'));
+
+        $compiled = Feel::compile(Feel::parse('total / count > 1'), static fn (string $n): string => '$this->' . $n);
+        // a zero divisor must not raise DivisionByZeroError: NAN makes the comparison false
+        self::assertStringContainsString('NAN', $compiled['php']);
     }
 }
