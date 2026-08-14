@@ -14,6 +14,7 @@ namespace Esdm\Generator\Feel;
  */
 final class Parser
 {
+    private const FUNCTIONS = ['date', 'duration', 'contains'];
     private const COMPARISONS = ['=', '!=', '<', '<=', '>', '>='];
 
     private int $i = 0;
@@ -180,6 +181,40 @@ final class Parser
         return $left;
     }
 
+    /** Returns the function name if this token (plus maybe the next) starts a supported call. */
+    private function twoWordFunction(string $lower): ?string
+    {
+        if (
+            ($lower === 'starts' || $lower === 'ends')
+            && strtolower($this->tokens[$this->i + 1]['value'] ?? '') === 'with'
+            && ($this->tokens[$this->i + 2]['value'] ?? '') === '('
+        ) {
+            return $lower . ' with';
+        }
+        if (in_array($lower, self::FUNCTIONS, true) && ($this->tokens[$this->i + 1]['value'] ?? '') === '(') {
+            return $lower;
+        }
+
+        return null;
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function arguments(): array
+    {
+        $this->eat('(');
+        $args = [];
+        if (!$this->at(')')) {
+            $args[] = $this->parseOr();
+            while ($this->at(',')) {
+                $this->advance();
+                $args[] = $this->parseOr();
+            }
+        }
+        $this->eat(')');
+
+        return $args;
+    }
+
     /**
      * `x in [a, b]` stays a membership test; `x in [1..10]` desugars to a range.
      *
@@ -292,12 +327,23 @@ final class Parser
                 return ['t' => 'null'];
             }
 
+            // FEEL spells some function names with a space, so the name is up to two tokens.
+            $function = $this->twoWordFunction($lower);
+            if ($function !== null) {
+                $this->advance();
+                if (str_contains($function, ' ')) {
+                    $this->advance();
+                }
+
+                return ['t' => 'call', 'fn' => $function, 'args' => $this->arguments()];
+            }
+
             if ($lower === 'today' || $lower === 'now') {
                 $this->advance();
                 $this->eat('(');
                 $this->eat(')');
 
-                return ['t' => 'call', 'fn' => $lower];
+                return ['t' => 'call', 'fn' => $lower, 'args' => []];
             }
 
             $this->advance();

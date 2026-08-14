@@ -46,6 +46,11 @@ final class Feel
 
     private const ARITHMETIC = ['+', '-', '*', '/'];
 
+    private const ARITY = [
+        'today' => 0, 'now' => 0, 'date' => 1, 'duration' => 1,
+        'starts with' => 2, 'ends with' => 2, 'contains' => 2,
+    ];
+
     /**
      * The arithmetic gates of 0002's 2026-08-14 amendment: an operand declared `string` or
      * `boolean` is not arithmetic, and a literal zero divisor never is. An absent type is skipped.
@@ -72,6 +77,10 @@ final class Feel
             self::arithmetic($node['r'], $types, $errors);
         } elseif ($t === 'not' || $t === 'neg') {
             self::arithmetic($node['e'], $types, $errors);
+        } elseif ($t === 'call') {
+            foreach ($node['args'] ?? [] as $argument) {
+                self::arithmetic($argument, $types, $errors);
+            }
         } elseif ($t === 'cond') {
             self::arithmetic($node['c'], $types, $errors);
             self::arithmetic($node['a'], $types, $errors);
@@ -125,7 +134,7 @@ final class Feel
             'cond' => '(' . self::emit($node['c'], $idToPhp, $uses) . ' ? '
                 . self::emit($node['a'], $idToPhp, $uses) . ' : '
                 . self::emit($node['b'], $idToPhp, $uses) . ')',
-            'call' => self::clockVar($node['fn'], $uses),
+            'call' => self::call($node, $idToPhp, $uses),
             default => 'null',
         };
     }
@@ -151,7 +160,54 @@ final class Feel
             return '((' . $right . ') == 0 ? NAN : ' . $left . ' / ' . $right . ')';
         }
 
+        // `validUntil + duration("P14D")` is a date shift, not a sum.
+        if (in_array($node['op'], ['+', '-'], true) && ($node['r']['fn'] ?? '') === 'duration') {
+            $sign = $node['op'] === '+' ? '+' : '-';
+
+            return "date('Y-m-d', strtotime(" . $left . ') ' . $sign . ' ' . $right . ' * 86400)';
+        }
+
         return '(' . $left . ' ' . self::phpOperator($node['op'], self::comparesToNull($node)) . ' ' . $right . ')';
+    }
+
+    /**
+     * A duration is always a literal, so its day count is computed here rather than by emitted
+     * code. Weeks are days; months and years are not, since their length depends on the date.
+     *
+     * @param array<string, mixed> $node
+     */
+    public static function durationDays(array $node): int
+    {
+        if (($node['t'] ?? '') !== 'str') {
+            throw new FeelException('duration() takes a string literal');
+        }
+        if (preg_match('/^P(\d+)([DW])$/', $node['v'], $m) !== 1) {
+            throw new FeelException(sprintf('unsupported duration "%s" - use P<n>D or P<n>W', $node['v']));
+        }
+
+        return (int) $m[1] * ($m[2] === 'W' ? 7 : 1);
+    }
+
+    /**
+     * @param array<string, mixed> $node
+     * @param array{today: bool, now: bool} $uses
+     */
+    private static function call(array $node, \Closure $idToPhp, array &$uses): string
+    {
+        if ($node['fn'] === 'today' || $node['fn'] === 'now') {
+            return self::clockVar($node['fn'], $uses);
+        }
+
+        $args = array_map(fn (array $a): string => self::emit($a, $idToPhp, $uses), $node['args']);
+
+        return match ($node['fn']) {
+            // an ISO-8601 date is already this family's wire form, so date() only normalises it
+            'date' => "date('Y-m-d', strtotime(" . $args[0] . '))',
+            'duration' => (string) self::durationDays($node['args'][0]),
+            'starts with' => 'str_starts_with((string) ' . $args[0] . ', (string) ' . $args[1] . ')',
+            'ends with' => 'str_ends_with((string) ' . $args[0] . ', (string) ' . $args[1] . ')',
+            default => 'str_contains((string) ' . $args[0] . ', (string) ' . $args[1] . ')',
+        };
     }
 
     private static function phpOperator(string $op, bool $againstNull = false): string
@@ -215,6 +271,23 @@ final class Feel
                 self::bind($node['e'], $allowed, $errors);
                 foreach ($node['list'] as $item) {
                     self::bind($item, $allowed, $errors);
+                }
+                break;
+            case 'call':
+                $arity = self::ARITY[$node['fn']] ?? null;
+                if ($arity === null) {
+                    $errors[] = sprintf('unknown function "%s"', $node['fn']);
+                } elseif ($arity !== count($node['args'] ?? [])) {
+                    $errors[] = sprintf(
+                        '%s takes %d argument%s, got %d',
+                        $node['fn'],
+                        $arity,
+                        $arity === 1 ? '' : 's',
+                        count($node['args'] ?? []),
+                    );
+                }
+                foreach ($node['args'] ?? [] as $argument) {
+                    self::bind($argument, $allowed, $errors);
                 }
                 break;
         }

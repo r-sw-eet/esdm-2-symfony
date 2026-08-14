@@ -145,4 +145,25 @@ final class FeelTest extends TestCase
 
         Feel::parse('if a then b');
     }
+
+    public function testCallsCarryArgumentsAndTheirArityIsChecked(): void
+    {
+        self::assertSame([], Feel::validate(Feel::parse('contains(product, "c")'), ['product']));
+        self::assertSame(
+            ['starts with takes 2 arguments, got 1'],
+            Feel::validate(Feel::parse('starts with(product)'), ['product']),
+        );
+    }
+
+    public function testDateArithmeticIsAShiftAndTheDurationIsResolvedHere(): void
+    {
+        $resolver = static fn (string $n): string => '$this->' . $n;
+
+        // a duration is a literal, so its day count is computed at generation time: two weeks is 14
+        $compiled = Feel::compile(Feel::parse('validUntil + duration("P2W") >= today()'), $resolver);
+        self::assertStringContainsString('14 * 86400', $compiled['php']);
+
+        $this->expectException(FeelException::class);
+        Feel::compile(Feel::parse('validUntil + duration("P1M") >= today()'), $resolver);
+    }
 }
