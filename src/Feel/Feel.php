@@ -64,6 +64,7 @@ final class Feel
             'num' => var_export($node['v'], true),
             'bool' => $node['v'] ? 'true' : 'false',
             'null' => 'null',
+            'neg' => '-(' . self::emit($node['e'], $idToPhp, $uses) . ')',
             'call' => self::clockVar($node['fn'], $uses),
             default => 'null',
         };

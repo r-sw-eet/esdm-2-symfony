@@ -14,6 +14,8 @@ namespace Esdm\Generator\Feel;
  */
 final class Parser
 {
+    private const COMPARISONS = ['=', '!=', '<', '<=', '>', '>='];
+
     private int $i = 0;
 
     /** @var list<array{type: string, value: string}> */
@@ -98,7 +100,7 @@ final class Parser
         $left = $this->parsePrimary();
         $token = $this->peek();
 
-        if ($token['type'] === 'op') {
+        if ($token['type'] === 'op' && in_array($token['value'], self::COMPARISONS, true)) {
             $this->advance();
 
             return ['t' => 'bin', 'op' => $token['value'], 'l' => $left, 'r' => $this->parsePrimary()];
@@ -107,33 +109,90 @@ final class Parser
         if ($this->isKeyword('in')) {
             $this->advance();
 
-            return ['t' => 'in', 'e' => $left, 'list' => $this->parseList()];
+            return $this->parseMembership($left);
+        }
+
+        // `x between a and b` is sugar for two comparisons; desugaring here keeps every
+        // compiler in the family unaware that it exists.
+        if ($this->isKeyword('between')) {
+            $this->advance();
+            $low = $this->parsePrimary();
+            if (!$this->isKeyword('and')) {
+                throw new FeelException('Expected "and" in a between expression');
+            }
+            $this->advance();
+
+            return self::range($left, $low, $this->parsePrimary());
         }
 
         return $left;
     }
 
-    /** @return list<array<string, mixed>> */
-    private function parseList(): array
+    /**
+     * `x in [a, b]` stays a membership test; `x in [1..10]` desugars to a range.
+     *
+     * @param array<string, mixed> $left
+     * @return array<string, mixed>
+     */
+    private function parseMembership(array $left): array
     {
         $this->eat('[');
-        $items = [];
-        if (!$this->at(']')) {
+        if ($this->at(']')) {
+            $this->eat(']');
+
+            return ['t' => 'in', 'e' => $left, 'list' => []];
+        }
+
+        $first = $this->parsePrimary();
+        if ($this->at('..')) {
+            $this->advance();
+            $high = $this->parsePrimary();
+            $this->eat(']');
+
+            return self::range($left, $first, $high);
+        }
+
+        $items = [$first];
+        while ($this->at(',')) {
+            $this->advance();
             $items[] = $this->parsePrimary();
-            while ($this->at(',')) {
-                $this->advance();
-                $items[] = $this->parsePrimary();
-            }
         }
         $this->eat(']');
 
-        return $items;
+        return ['t' => 'in', 'e' => $left, 'list' => $items];
+    }
+
+    /**
+     * @param array<string, mixed> $value
+     * @param array<string, mixed> $low
+     * @param array<string, mixed> $high
+     * @return array<string, mixed>
+     */
+    private static function range(array $value, array $low, array $high): array
+    {
+        return [
+            't' => 'and',
+            'l' => ['t' => 'bin', 'op' => '>=', 'l' => $value, 'r' => $low],
+            'r' => ['t' => 'bin', 'op' => '<=', 'l' => $value, 'r' => $high],
+        ];
     }
 
     /** @return array<string, mixed> */
     private function parsePrimary(): array
     {
         $token = $this->peek();
+
+        if ($this->at('-')) {
+            $this->advance();
+            if ($this->peek()['type'] === 'num') {
+                $value = $this->peek()['value'];
+                $this->advance();
+
+                return ['t' => 'num', 'v' => -(str_contains($value, '.') ? (float) $value : (int) $value)];
+            }
+
+            return ['t' => 'neg', 'e' => $this->parsePrimary()];
+        }
 
         if ($this->at('(')) {
             $this->advance();

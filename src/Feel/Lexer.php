@@ -11,7 +11,7 @@ final class Lexer
     public static function tokenize(string $source): array
     {
         // Anchored, ordered alternation; longest operators first.
-        $pattern = '/(\s+)|(\d+(?:\.\d+)?)|("[^"]*")|(<=|>=|!=|=|<|>)|([\(\)\[\],])|([A-Za-z_][A-Za-z0-9_]*)/A';
+        $pattern = '/(\s+)|(\d+(?:\.\d+)?)|("[^"]*")|(\.\.)|(<=|>=|!=|=|<|>)|(-)|([\(\)\[\],])|([A-Za-z_][A-Za-z0-9_]*)/A';
 
         $tokens = [];
         $offset = 0;
@@ -32,7 +32,7 @@ final class Lexer
                 (bool) preg_match('/^\d/', $value) => 'num',
                 $value[0] === '"' => 'str',
                 (bool) preg_match('/^[A-Za-z_]/', $value) => 'name',
-                in_array($value, ['(', ')', '[', ']', ','], true) => 'punc',
+                in_array($value, ['(', ')', '[', ']', ',', '..'], true) => 'punc',
                 default => 'op',
             };
 

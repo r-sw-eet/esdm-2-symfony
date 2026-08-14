@@ -97,4 +97,25 @@ final class FeelTest extends TestCase
 
         self::assertStringContainsString('===', $compiled['php']);
     }
+
+    public function testANegativeLiteralFoldsSoTheEmittedCodeReadsNaturally(): void
+    {
+        self::assertSame(['t' => 'num', 'v' => -1], Feel::parse('amount > -1')['r']);
+    }
+
+    public function testBetweenAndRangesDesugarIntoTwoComparisons(): void
+    {
+        $expected = Feel::parse('qty >= 1 and qty <= 10');
+
+        self::assertSame($expected, Feel::parse('qty between 1 and 10'));
+        self::assertSame($expected, Feel::parse('qty in [1..10]'));
+    }
+
+    public function testMembershipStaysMembershipAndBinaryMinusWaitsForArithmetic(): void
+    {
+        self::assertSame('in', Feel::parse('status in ["a", "b"]')['t']);
+
+        $this->expectException(FeelException::class);
+        Feel::parse('a - b');
+    }
 }
