@@ -25,17 +25,44 @@ final class Schema implements \IteratorAggregate
         $fields = [];
 
         foreach ($properties as $name => $definition) {
-            $definition = is_array($definition) ? $definition : [];
-            $fields[] = new Field(
-                name: (string) $name,
-                jsonType: (string) ($definition['type'] ?? 'mixed'),
-                required: in_array($name, $required, true),
-                default: $definition['default'] ?? null,
-                hasDefault: array_key_exists('default', $definition),
-            );
+            $fields[] = self::buildField((string) $name, $definition, in_array($name, $required, true));
         }
 
         return new self($fields);
+    }
+
+    /** Keeps an object's own properties and an array's element, which FEEL needs to bind against. */
+    private static function buildField(string $name, mixed $definition, bool $required): Field
+    {
+        $definition = is_array($definition) ? $definition : [];
+        $type = (string) ($definition['type'] ?? 'mixed');
+        $nested = [];
+        $element = null;
+
+        if ($type === 'object') {
+            $innerRequired = $definition['required'] ?? [];
+            foreach ($definition['properties'] ?? [] as $innerName => $innerDefinition) {
+                $nested[] = self::buildField(
+                    (string) $innerName,
+                    $innerDefinition,
+                    in_array($innerName, $innerRequired, true),
+                );
+            }
+        }
+        if ($type === 'array' && isset($definition['items'])) {
+            $element = self::buildField('item', $definition['items'], true);
+        }
+
+        return new Field(
+            name: $name,
+            jsonType: $type,
+            required: $required,
+            default: $definition['default'] ?? null,
+            hasDefault: array_key_exists('default', $definition),
+            isIdentity: false,
+            nested: $nested,
+            element: $element,
+        );
     }
 
     public function field(string $name): ?Field

@@ -14,7 +14,7 @@ namespace Esdm\Generator\Feel;
  */
 final class Parser
 {
-    private const FUNCTIONS = ['date', 'duration', 'contains'];
+    private const FUNCTIONS = ['date', 'duration', 'contains', 'count', 'sum'];
     private const COMPARISONS = ['=', '!=', '<', '<=', '>', '>='];
 
     private int $i = 0;
@@ -74,6 +74,26 @@ final class Parser
     /** @return array<string, mixed> */
     private function parseOr(): array
     {
+        // `every x in xs satisfies p` and its `some` twin bind the variable for the predicate only.
+        if ($this->isKeyword('every') || $this->isKeyword('some')) {
+            $every = $this->isKeyword('every');
+            $this->advance();
+            $variable = $this->peek()['value'];
+            $this->advance();
+            if (!$this->isKeyword('in')) {
+                throw new FeelException('Expected "in" in a quantified expression');
+            }
+            $this->advance();
+            $collection = $this->parsePostfix();
+            if (!$this->isKeyword('satisfies')) {
+                throw new FeelException('Expected "satisfies" in a quantified expression');
+            }
+            $this->advance();
+
+            return ['t' => 'quant', 'every' => $every, 'variable' => $variable,
+                'collection' => $collection, 'predicate' => $this->parseOr()];
+        }
+
         // `if` sits at the lowest precedence, so its branches are whole expressions and it needs
         // no parentheses to hold them.
         if ($this->isKeyword('if')) {
@@ -171,14 +191,32 @@ final class Parser
      */
     private function parseMultiplicative(): array
     {
-        $left = $this->parsePrimary();
+        $left = $this->parsePostfix();
         while ($this->at('*') || $this->at('/')) {
             $op = $this->peek()['value'];
             $this->advance();
-            $left = ['t' => 'bin', 'op' => $op, 'l' => $left, 'r' => $this->parsePrimary()];
+            $left = ['t' => 'bin', 'op' => $op, 'l' => $left, 'r' => $this->parsePostfix()];
         }
 
         return $left;
+    }
+
+    /**
+     * `a.b` binds tighter than any operator.
+     *
+     * @return array<string, mixed>
+     */
+    private function parsePostfix(): array
+    {
+        $node = $this->parsePrimary();
+        while ($this->at('.')) {
+            $this->advance();
+            $property = $this->peek()['value'];
+            $this->advance();
+            $node = ['t' => 'path', 'target' => $node, 'property' => $property];
+        }
+
+        return $node;
     }
 
     /** Returns the function name if this token (plus maybe the next) starts a supported call. */

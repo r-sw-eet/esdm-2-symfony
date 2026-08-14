@@ -166,4 +166,23 @@ final class FeelTest extends TestCase
         $this->expectException(FeelException::class);
         Feel::compile(Feel::parse('validUntil + duration("P1M") >= today()'), $resolver);
     }
+
+    public function testCollectionsAndPathsCompileAndScope(): void
+    {
+        $r = static fn (string $n): string => '$this->' . $n;
+
+        self::assertStringContainsString('count(', Feel::compile(Feel::parse('count(tags) >= 1'), $r)['php']);
+        self::assertStringContainsString('array_sum(', Feel::compile(Feel::parse('sum(amounts) > 100'), $r)['php']);
+        self::assertStringContainsString(
+            'array_reduce(',
+            Feel::compile(Feel::parse('every t in tags satisfies t != ""'), $r)['php'],
+        );
+
+        // the quantifier variable is in scope for its predicate only
+        self::assertSame([], Feel::validate(Feel::parse('every t in tags satisfies t != ""'), ['tags']));
+        self::assertSame(
+            ['unknown field "u"'],
+            Feel::validate(Feel::parse('some t in tags satisfies u = 1'), ['tags']),
+        );
+    }
 }

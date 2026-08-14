@@ -48,7 +48,7 @@ final class Feel
 
     private const ARITY = [
         'today' => 0, 'now' => 0, 'date' => 1, 'duration' => 1,
-        'starts with' => 2, 'ends with' => 2, 'contains' => 2,
+        'starts with' => 2, 'ends with' => 2, 'contains' => 2, 'count' => 1, 'sum' => 1,
     ];
 
     /**
@@ -81,6 +81,9 @@ final class Feel
             foreach ($node['args'] ?? [] as $argument) {
                 self::arithmetic($argument, $types, $errors);
             }
+        } elseif ($t === 'quant') {
+            self::arithmetic($node['collection'], $types, $errors);
+            self::arithmetic($node['predicate'], $types, $errors);
         } elseif ($t === 'cond') {
             self::arithmetic($node['c'], $types, $errors);
             self::arithmetic($node['a'], $types, $errors);
@@ -115,26 +118,30 @@ final class Feel
      * @param array<string, mixed> $node
      * @param array{today: bool, now: bool} $uses
      */
-    private static function emit(array $node, \Closure $idToPhp, array &$uses): string
+    private static function emit(array $node, \Closure $idToPhp, array &$uses, ?string $local = null): string
     {
         return match ($node['t']) {
-            'or' => '(' . self::emit($node['l'], $idToPhp, $uses) . ' || ' . self::emit($node['r'], $idToPhp, $uses) . ')',
-            'and' => '(' . self::emit($node['l'], $idToPhp, $uses) . ' && ' . self::emit($node['r'], $idToPhp, $uses) . ')',
-            'not' => '!(' . self::emit($node['e'], $idToPhp, $uses) . ')',
-            'bin' => self::binary($node, $idToPhp, $uses),
-            'in' => 'in_array(' . self::emit($node['e'], $idToPhp, $uses) . ', ['
-                . implode(', ', array_map(fn (array $x): string => self::emit($x, $idToPhp, $uses), $node['list']))
+            'or' => '(' . self::emit($node['l'], $idToPhp, $uses, $local) . ' || ' . self::emit($node['r'], $idToPhp, $uses, $local) . ')',
+            'and' => '(' . self::emit($node['l'], $idToPhp, $uses, $local) . ' && ' . self::emit($node['r'], $idToPhp, $uses, $local) . ')',
+            'not' => '!(' . self::emit($node['e'], $idToPhp, $uses, $local) . ')',
+            'bin' => self::binary($node, $idToPhp, $uses, $local),
+            'in' => 'in_array(' . self::emit($node['e'], $idToPhp, $uses, $local) . ', ['
+                . implode(', ', array_map(fn (array $x): string => self::emit($x, $idToPhp, $uses, $local), $node['list']))
                 . '], true)',
-            'id' => $idToPhp($node['name']),
+            'id' => $node['name'] === $local ? '$' . $local : $idToPhp($node['name']),
+            // an object-typed field arrives as an array, so a property is a lookup
+            'path' => '(((' . self::emit($node['target'], $idToPhp, $uses, $local) . ')['
+                . var_export($node['property'], true) . '] ?? null))',
+            'quant' => self::quantified($node, $idToPhp, $uses, $local),
             'str' => var_export($node['v'], true),
             'num' => var_export($node['v'], true),
             'bool' => $node['v'] ? 'true' : 'false',
             'null' => 'null',
-            'neg' => '-(' . self::emit($node['e'], $idToPhp, $uses) . ')',
-            'cond' => '(' . self::emit($node['c'], $idToPhp, $uses) . ' ? '
-                . self::emit($node['a'], $idToPhp, $uses) . ' : '
-                . self::emit($node['b'], $idToPhp, $uses) . ')',
-            'call' => self::call($node, $idToPhp, $uses),
+            'neg' => '-(' . self::emit($node['e'], $idToPhp, $uses, $local) . ')',
+            'cond' => '(' . self::emit($node['c'], $idToPhp, $uses, $local) . ' ? '
+                . self::emit($node['a'], $idToPhp, $uses, $local) . ' : '
+                . self::emit($node['b'], $idToPhp, $uses, $local) . ')',
+            'call' => self::call($node, $idToPhp, $uses, $local),
             default => 'null',
         };
     }
@@ -149,10 +156,10 @@ final class Feel
      * @param array<string, mixed> $node
      * @param array{today: bool, now: bool} $uses
      */
-    private static function binary(array $node, \Closure $idToPhp, array &$uses): string
+    private static function binary(array $node, \Closure $idToPhp, array &$uses, ?string $local = null): string
     {
-        $left = self::emit($node['l'], $idToPhp, $uses);
-        $right = self::emit($node['r'], $idToPhp, $uses);
+        $left = self::emit($node['l'], $idToPhp, $uses, $local);
+        $right = self::emit($node['r'], $idToPhp, $uses, $local);
 
         // FEEL yields null on a zero divisor and null in a predicate is false; NAN carries that,
         // since every comparison against NAN is false in PHP - and it avoids DivisionByZeroError.
@@ -192,22 +199,39 @@ final class Feel
      * @param array<string, mixed> $node
      * @param array{today: bool, now: bool} $uses
      */
-    private static function call(array $node, \Closure $idToPhp, array &$uses): string
+    private static function call(array $node, \Closure $idToPhp, array &$uses, ?string $local = null): string
     {
         if ($node['fn'] === 'today' || $node['fn'] === 'now') {
             return self::clockVar($node['fn'], $uses);
         }
 
-        $args = array_map(fn (array $a): string => self::emit($a, $idToPhp, $uses), $node['args']);
+        $args = array_map(fn (array $a): string => self::emit($a, $idToPhp, $uses, $local), $node['args']);
 
         return match ($node['fn']) {
             // an ISO-8601 date is already this family's wire form, so date() only normalises it
             'date' => "date('Y-m-d', strtotime(" . $args[0] . '))',
             'duration' => (string) self::durationDays($node['args'][0]),
+            'count' => 'count(' . $args[0] . ' ?? [])',
+            'sum' => 'array_sum(' . $args[0] . ' ?? [])',
             'starts with' => 'str_starts_with((string) ' . $args[0] . ', (string) ' . $args[1] . ')',
             'ends with' => 'str_ends_with((string) ' . $args[0] . ', (string) ' . $args[1] . ')',
             default => 'str_contains((string) ' . $args[0] . ', (string) ' . $args[1] . ')',
         };
+    }
+
+    /**
+     * @param array<string, mixed> $node
+     * @param array{today: bool, now: bool} $uses
+     */
+    private static function quantified(array $node, \Closure $idToPhp, array &$uses, ?string $local): string
+    {
+        $collection = self::emit($node['collection'], $idToPhp, $uses, $local);
+        $predicate = self::emit($node['predicate'], $idToPhp, $uses, $node['variable']);
+        $callback = 'static fn ($' . $node['variable'] . '): bool => ' . $predicate;
+
+        return $node['every']
+            ? 'array_reduce(' . $collection . ', static fn ($c, $i) => $c && (' . $callback . ')($i), true)'
+            : 'array_reduce(' . $collection . ', static fn ($c, $i) => $c || (' . $callback . ')($i), false)';
     }
 
     private static function phpOperator(string $op, bool $againstNull = false): string
@@ -266,6 +290,14 @@ final class Feel
                 self::bind($node['c'], $allowed, $errors);
                 self::bind($node['a'], $allowed, $errors);
                 self::bind($node['b'], $allowed, $errors);
+                break;
+            case 'path':
+                self::bind($node['target'], $allowed, $errors);
+                break;
+            case 'quant':
+                self::bind($node['collection'], $allowed, $errors);
+                // the variable is in scope for the predicate only
+                self::bind($node['predicate'], [...$allowed, $node['variable']], $errors);
                 break;
             case 'in':
                 self::bind($node['e'], $allowed, $errors);
